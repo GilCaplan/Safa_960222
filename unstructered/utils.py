@@ -93,7 +93,7 @@ def compute_word_surprisal(text, model, tokenizer, device):
             token = input_ids[0, i].item()
             token_log_prob = log_probs[0, i - 1, token]
             surprisal_val = -token_log_prob.item() / math.log(2)  # Convert to bits
-            surprisal_val = max(0.1, min(surprisal_val, 50.0))  # Clamp values
+            # surprisal_val = max(0.1, min(surprisal_val, 50.0))  # Clamp values
             surprisals.append(surprisal_val)
 
         # Get word offsets and align tokens to words
@@ -145,7 +145,11 @@ def calculate_surprisal(text, model, tokenizer, device):
 
 
 def calculate_entropy(text, model, tokenizer, device):
-    """Calculate word-level entropy using offset mapping for proper alignment"""
+    """Calculate word-level entropy using offset mapping for proper alignment
+
+    This version filters for meaningful tokens to avoid inflated entropy from
+    irrelevant tokens in the vocabulary.
+    """
     if not text or not text.strip():
         return []
 
@@ -170,21 +174,41 @@ def calculate_entropy(text, model, tokenizer, device):
             prev_logits = logits[0, i - 1]
             probs = torch.softmax(prev_logits, dim=-1)
 
-            # Convert to numpy for entropy calculation
-            prob_array = probs.cpu().numpy()
+            # Method 1: Top-k entropy (consider only top k most likely tokens)
+            # This is more psychologically plausible
+            k = 100  # Consider top 100 most likely tokens
+            top_probs, _ = torch.topk(probs, k=min(k, probs.size(0)))
 
-            # Filter very small probabilities to avoid numerical issues
-            significant_probs = prob_array[prob_array > 1e-8]
+            # Renormalize the top-k probabilities
+            top_probs = top_probs / top_probs.sum()
+
+            # Calculate entropy only over these top tokens
+            # Add small epsilon for numerical stability
+            epsilon = 1e-10
+            entropy = -torch.sum(top_probs * torch.log2(top_probs + epsilon)).item()
+
+            # Alternative Method 2: Threshold-based filtering
+            # Uncomment to use this instead of top-k
+            """
+            # Only consider tokens with probability above threshold
+            threshold = 0.001  # 0.1% probability
+            mask = probs > threshold
+            significant_probs = probs[mask]
 
             if len(significant_probs) > 0:
-                # Normalize probabilities
-                significant_probs = significant_probs / np.sum(significant_probs)
-                # Calculate entropy in bits
-                entropy = -np.sum(significant_probs * np.log2(significant_probs + 1e-10))
-                entropy = max(0.1, min(entropy, 20.0))  # Clamp
+                # Renormalize
+                significant_probs = significant_probs / significant_probs.sum()
+                # Calculate entropy with numerical stability
+                epsilon = 1e-10
+                entropy = -torch.sum(significant_probs * torch.log2(significant_probs + epsilon)).item()
             else:
+                # If no tokens above threshold, use a default low entropy
                 entropy = 0.1
+            """
 
+            # Clamp entropy to reasonable range
+            # Max entropy for k=100 tokens would be log2(100) ≈ 6.64 bits
+            # entropy = max(0.1, min(entropy, 6.64))
             entropies.append(entropy)
 
         # Get words with their character offsets
@@ -196,8 +220,7 @@ def calculate_entropy(text, model, tokenizer, device):
         total_tokens = len(entropies)
 
         for word, w_start, w_end in word_offsets:
-            acc_entropy = 0.0
-            tokens_used = 0
+            word_entropies = []
 
             while token_pointer < total_tokens:
                 # +1 because first token is special token (BOS/CLS)
@@ -216,23 +239,35 @@ def calculate_entropy(text, model, tokenizer, device):
                     continue
 
                 # Token overlaps with word
-                acc_entropy += entropies[token_pointer]
-                tokens_used += 1
+                word_entropies.append(entropies[token_pointer])
                 token_pointer += 1
 
-            # For entropy, take average of token entropies (unlike surprisal which sums)
-            word_entropy = acc_entropy / tokens_used if tokens_used > 0 else 10.0
+            # For word-level entropy, we have several options:
+            if len(word_entropies) > 0:
+                # Option 1: Average entropy across subword tokens
+                word_entropy = sum(word_entropies) / len(word_entropies)
+
+                # Option 2: Maximum entropy (most uncertain position)
+                # word_entropy = max(word_entropies)
+
+                # Option 3: Entropy at first subword (often most uncertain)
+                # word_entropy = word_entropies[0]
+            else:
+                # Default entropy if no tokens found
+                word_entropy = 3.0  # Middle of our range
+
             word_level_entropy.append(word_entropy)
 
         # Ensure we have the right number of entropies
         while len(word_level_entropy) < len(words):
-            word_level_entropy.append(10.0)
+            word_level_entropy.append(3.0)
 
         return word_level_entropy[:len(words)]
 
     except Exception as e:
         print(f"Error calculating entropy for '{text[:30]}...': {e}")
-        return [10.0] * len(words)
+        # Return reasonable default entropy values
+        return [3.0] * len(words)
 
 
 def process_dataset_surprisal_entropy(df, model, tokenizer, device, sample_size=None):
