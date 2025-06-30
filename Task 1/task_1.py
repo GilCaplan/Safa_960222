@@ -13,11 +13,13 @@ import traceback
 import pickle
 import kenlm
 from datasets import load_dataset
+
 print("✓ Hugging Face datasets available")
 HF_DATASETS_AVAILABLE = True
 
 plt.style.use('default')
 sns.set_palette("husl")
+
 
 class WikiText2KenLMModel:
     """
@@ -221,7 +223,7 @@ class WikiText2KenLMModel:
 
             with open(train_file, 'r') as infile, open(self.model_path, 'w') as outfile:
                 result = subprocess.run(cmd, stdin=infile, stdout=outfile,
-                                      stderr=subprocess.PIPE, text=True, timeout=600)  # 10 min timeout
+                                        stderr=subprocess.PIPE, text=True, timeout=600)  # 10 min timeout
 
             if result.returncode != 0:
                 print(f"❌ lmplz failed with return code {result.returncode}")
@@ -236,7 +238,7 @@ class WikiText2KenLMModel:
             if build_binary_cmd:
                 print(f"Running: {build_binary_cmd} {self.model_path} {self.binary_model_path}")
                 result = subprocess.run([build_binary_cmd, self.model_path, self.binary_model_path],
-                                      check=True, timeout=300)
+                                        check=True, timeout=300)
                 print(f"✓ Binary model saved: {self.binary_model_path}")
             else:
                 print("⚠️ build_binary not found, using ARPA format")
@@ -337,6 +339,7 @@ class WikiText2KenLMModel:
     def get_surprisal_and_probability(self, sentence):
         """
         Get surprisal (base-10) and probability for each word using trained WikiText-2 KenLM model
+        FIXED: NO CLAMPING - keep natural values
         """
         if self.model is None:
             print("Model not loaded!")
@@ -360,16 +363,24 @@ class WikiText2KenLMModel:
                 word_logprob10 = full_score - context_score
                 word_surprisal = -word_logprob10  # Already base-10
 
-                word_surprisal = max(0.1, min(word_surprisal, 25.0))  # bound
+                # FIXED: NO CLAMPING - keep natural values
+                # Check for infinite or NaN values and replace with reasonable fallback
+                if math.isnan(word_surprisal) or math.isinf(word_surprisal):
+                    word_surprisal = 8.0  # Reasonable fallback for rare words
+
                 word_prob = 10 ** (-word_surprisal)
+
+                # Check probability is valid
+                if math.isnan(word_prob) or math.isinf(word_prob) or word_prob <= 0:
+                    word_prob = 1e-8  # Small but valid probability
 
                 surprisals.append(word_surprisal)
                 probabilities.append(word_prob)
 
             except Exception as e:
                 print(f"Error processing word '{word}': {e}")
-                surprisals.append(10.0)
-                probabilities.append(0.001)
+                surprisals.append(8.0)  # Reasonable fallback
+                probabilities.append(1e-8)
 
         return surprisals, probabilities
 
@@ -409,8 +420,12 @@ class PythiaModel:
             word_spans.append((word, begin, end))
             cursor = end
         return word_spans
+
     def get_surprisal_and_probability(self, sentence):
-        """Compute word-level surprisal (base-10 log) and dummy probabilities."""
+        """
+        Compute word-level surprisal (base-10 log) and probabilities.
+        FIXED: NO CLAMPING - keep natural values
+        """
         try:
             words_with_offsets = self._extract_words_with_offsets(sentence)
             encoded = self.tokenizer(sentence, return_tensors="pt", return_offsets_mapping=True,
@@ -445,58 +460,36 @@ class PythiaModel:
                     if t_end <= w_start:
                         token_pointer += 1
                         continue
-                    acc_surprisal += surprisals[token_pointer]
+                    acc_surprisal += surprisals[token_pointer]  # SUM - no clamping
                     token_count += 1
                     token_pointer += 1
 
-                word_surprisals.append(acc_surprisal if token_count > 0 else 10.0)  # fallback
+                # FIXED: NO CLAMPING - keep natural values
+                if token_count > 0:
+                    word_surprisal = acc_surprisal
+                    # Check for NaN/inf and use reasonable fallback
+                    if math.isnan(word_surprisal) or math.isinf(word_surprisal):
+                        word_surprisal = 8.0
+                else:
+                    word_surprisal = 8.0  # Reasonable fallback for unmatched words
 
-            # Dummy probabilities: exp(-surprisal * log(10))
-            word_probabilities = [10 ** (-s) for s in word_surprisals]
+                word_surprisals.append(word_surprisal)
+
+            # Calculate probabilities: 10^(-surprisal)
+            word_probabilities = []
+            for s in word_surprisals:
+                prob = 10 ** (-s)
+                # Ensure probability is valid
+                if math.isnan(prob) or math.isinf(prob) or prob <= 0:
+                    prob = 1e-8
+                word_probabilities.append(prob)
 
             return word_surprisals, word_probabilities
 
         except Exception as e:
             print(f"Error computing Pythia surprisal: {e}")
             fallback_len = len(sentence.split())
-            return [10.0] * fallback_len, [0.001] * fallback_len
-
-
-    def _align_tokens_to_words(self, words, tokens, token_values):
-        """Align subword tokens to words"""
-        token_texts = [self.tokenizer.decode([token], skip_special_tokens=True) for token in tokens]
-
-        word_values = []
-        token_idx = 0
-
-        for word in words:
-            word_token_values = []
-
-            while token_idx < len(token_texts):
-                token_text = token_texts[token_idx].strip()
-
-                if token_text and (word.lower().startswith(token_text.lower()) or
-                                 token_text.lower() in word.lower()):
-                    if token_idx < len(token_values):
-                        word_token_values.append(token_values[token_idx])
-                    token_idx += 1
-
-                    covered_text = ''.join([token_texts[j].strip()
-                                          for j in range(token_idx - len(word_token_values), token_idx)])
-                    if len(covered_text) >= len(word) * 0.8:
-                        break
-                else:
-                    break
-
-            if word_token_values:
-                word_value = sum(word_token_values) / len(word_token_values)
-            else:
-                word_value = 10.0 if 'surprisal' in str(token_values) else 0.001
-                token_idx += 1
-
-            word_values.append(word_value)
-
-        return word_values
+            return [8.0] * fallback_len, [1e-8] * fallback_len
 
 
 def load_and_preprocess_data(file_path):
@@ -545,7 +538,10 @@ def load_and_preprocess_data(file_path):
 
 
 def compute_surprisals(test_df, kenlm_model, pythia_model):
-    """Compute surprisals using both models"""
+    """
+    Compute surprisals using both models
+    FIXED: NO CLAMPING in filtering - use natural ranges
+    """
     print("Computing surprisal values...")
 
     surprisal_data = []
@@ -577,20 +573,26 @@ def compute_surprisals(test_df, kenlm_model, pythia_model):
             if min_len < 3:
                 continue
 
-            # Store data
+            # Store data with more lenient filtering - NO CLAMPING
             for i in range(min_len):
-                if (0.1 <= kenlm_surprisals[i] <= 30.0 and
-                    0.1 <= pythia_surprisals[i] <= 30.0 and
-                    50 <= reading_times[i] <= 2000):
+                # Check for valid values (not NaN/inf) but don't clamp
+                kenlm_surp = kenlm_surprisals[i]
+                pythia_surp = pythia_surprisals[i]
+                rt = reading_times[i]
 
+                # Only exclude if values are clearly invalid
+                if (not math.isnan(kenlm_surp) and not math.isinf(kenlm_surp) and
+                        not math.isnan(pythia_surp) and not math.isinf(pythia_surp) and
+                        not math.isnan(rt) and not math.isinf(rt) and
+                        kenlm_surp > 0 and pythia_surp > 0 and rt > 0):
                     surprisal_data.append({
                         'PARTICIPANT': participant,
                         'TRIAL': trial,
                         'WORD': words[i],
                         'WORD_INDEX': i,
-                        'IA_DWELL_TIME': reading_times[i],
-                        'TRIGRAM_SURPRISAL': kenlm_surprisals[i],
-                        'PYTHIA_SURPRISAL': pythia_surprisals[i],
+                        'IA_DWELL_TIME': rt,
+                        'TRIGRAM_SURPRISAL': kenlm_surp,  # Natural values
+                        'PYTHIA_SURPRISAL': pythia_surp,  # Natural values
                         'TRIGRAM_PROBABILITY': kenlm_probs[i],
                         'PYTHIA_PROBABILITY': pythia_probs[i]
                     })
@@ -601,6 +603,10 @@ def compute_surprisals(test_df, kenlm_model, pythia_model):
 
     result_df = pd.DataFrame(surprisal_data)
     print(f"✓ Computed surprisals for {len(result_df)} words")
+    print(
+        f"Trigram surprisal range: {result_df['TRIGRAM_SURPRISAL'].min():.2f} - {result_df['TRIGRAM_SURPRISAL'].max():.2f}")
+    print(
+        f"Pythia surprisal range: {result_df['PYTHIA_SURPRISAL'].min():.2f} - {result_df['PYTHIA_SURPRISAL'].max():.2f}")
     return result_df
 
 
@@ -670,10 +676,12 @@ def generate_all_task1_graphs(df):
 
     # Graph 4: Pythia Probability vs Current RT
     ax4 = plt.subplot(3, 3, 4)
-    slope4, intercept4, r4, p4, _ = stats.linregress(spillover_df['CURRENT_PYTHIA_LOG_PROB'], spillover_df['CURRENT_RT'])
+    slope4, intercept4, r4, p4, _ = stats.linregress(spillover_df['CURRENT_PYTHIA_LOG_PROB'],
+                                                     spillover_df['CURRENT_RT'])
     r2_4 = r4 ** 2
     plt.scatter(spillover_df['CURRENT_PYTHIA_LOG_PROB'], spillover_df['CURRENT_RT'], alpha=0.3, s=1, color='orange')
-    plt.plot(spillover_df['CURRENT_PYTHIA_LOG_PROB'], intercept4 + slope4 * spillover_df['CURRENT_PYTHIA_LOG_PROB'], 'r-', linewidth=2)
+    plt.plot(spillover_df['CURRENT_PYTHIA_LOG_PROB'], intercept4 + slope4 * spillover_df['CURRENT_PYTHIA_LOG_PROB'],
+             'r-', linewidth=2)
     plt.xlabel('Pythia Log Probability')
     plt.ylabel('Current Word RT (ms)')
     plt.title(f'4. Pythia Probability vs Current RT (R² = {r2_4:.3f})')
@@ -684,7 +692,8 @@ def generate_all_task1_graphs(df):
     slope5, intercept5, r5, p5, _ = stats.linregress(spillover_df['CURRENT_PYTHIA_LOG_PROB'], spillover_df['NEXT_RT'])
     r2_5 = r5 ** 2
     plt.scatter(spillover_df['CURRENT_PYTHIA_LOG_PROB'], spillover_df['NEXT_RT'], alpha=0.3, s=1, color='red')
-    plt.plot(spillover_df['CURRENT_PYTHIA_LOG_PROB'], intercept5 + slope5 * spillover_df['CURRENT_PYTHIA_LOG_PROB'], 'r-', linewidth=2)
+    plt.plot(spillover_df['CURRENT_PYTHIA_LOG_PROB'], intercept5 + slope5 * spillover_df['CURRENT_PYTHIA_LOG_PROB'],
+             'r-', linewidth=2)
     plt.xlabel('Pythia Log Probability')
     plt.ylabel('Next Word RT (ms)')
     plt.title(f'5. Pythia Probability vs Next RT (R² = {r2_5:.3f})')
@@ -692,10 +701,12 @@ def generate_all_task1_graphs(df):
 
     # Graph 6: Trigram Probability vs Current RT
     ax6 = plt.subplot(3, 3, 6)
-    slope6, intercept6, r6, p6, _ = stats.linregress(spillover_df['CURRENT_TRIGRAM_LOG_PROB'], spillover_df['CURRENT_RT'])
+    slope6, intercept6, r6, p6, _ = stats.linregress(spillover_df['CURRENT_TRIGRAM_LOG_PROB'],
+                                                     spillover_df['CURRENT_RT'])
     r2_6 = r6 ** 2
     plt.scatter(spillover_df['CURRENT_TRIGRAM_LOG_PROB'], spillover_df['CURRENT_RT'], alpha=0.3, s=1, color='brown')
-    plt.plot(spillover_df['CURRENT_TRIGRAM_LOG_PROB'], intercept6 + slope6 * spillover_df['CURRENT_TRIGRAM_LOG_PROB'], 'r-', linewidth=2)
+    plt.plot(spillover_df['CURRENT_TRIGRAM_LOG_PROB'], intercept6 + slope6 * spillover_df['CURRENT_TRIGRAM_LOG_PROB'],
+             'r-', linewidth=2)
     plt.xlabel('Trigram Log Probability')
     plt.ylabel('Current Word RT (ms)')
     plt.title(f'6. Trigram Probability vs Current RT (R² = {r2_6:.3f})')
@@ -706,7 +717,8 @@ def generate_all_task1_graphs(df):
     slope7, intercept7, r7, p7, _ = stats.linregress(spillover_df['CURRENT_TRIGRAM_LOG_PROB'], spillover_df['NEXT_RT'])
     r2_7 = r7 ** 2
     plt.scatter(spillover_df['CURRENT_TRIGRAM_LOG_PROB'], spillover_df['NEXT_RT'], alpha=0.3, s=1, color='pink')
-    plt.plot(spillover_df['CURRENT_TRIGRAM_LOG_PROB'], intercept7 + slope7 * spillover_df['CURRENT_TRIGRAM_LOG_PROB'], 'r-', linewidth=2)
+    plt.plot(spillover_df['CURRENT_TRIGRAM_LOG_PROB'], intercept7 + slope7 * spillover_df['CURRENT_TRIGRAM_LOG_PROB'],
+             'r-', linewidth=2)
     plt.xlabel('Trigram Log Probability')
     plt.ylabel('Next Word RT (ms)')
     plt.title(f'7. Trigram Probability vs Next RT (R² = {r2_7:.3f})')
@@ -758,7 +770,7 @@ def main():
     DATA_PATH = "../unstructered/data/onestop/ia_Paragraph.csv"
 
     try:
-        print("=== TASK 1: N-gram vs Neural Language Models ===")
+        print("=== TASK 1: N-gram vs Neural Language Models (FIXED - NO CLAMPING) ===")
         print("Training KenLM trigram on WikiText-2...")
 
         # 1. Load and preprocess data
@@ -777,7 +789,7 @@ def main():
         pythia_model = PythiaModel()
 
         # 4. Compute surprisals
-        print("\n=== Computing Surprisals ===")
+        print("\n=== Computing Surprisals (NO CLAMPING) ===")
         surprisal_df = compute_surprisals(df, kenlm_model, pythia_model)
 
         if len(surprisal_df) == 0:
@@ -785,8 +797,10 @@ def main():
             return None
 
         print(f"Final dataset: {len(surprisal_df)} words")
-        print(f"Trigram surprisal range: {surprisal_df['TRIGRAM_SURPRISAL'].min():.2f} - {surprisal_df['TRIGRAM_SURPRISAL'].max():.2f}")
-        print(f"Pythia surprisal range: {surprisal_df['PYTHIA_SURPRISAL'].min():.2f} - {surprisal_df['PYTHIA_SURPRISAL'].max():.2f}")
+        print(
+            f"Trigram surprisal: μ={surprisal_df['TRIGRAM_SURPRISAL'].mean():.2f}, σ={surprisal_df['TRIGRAM_SURPRISAL'].std():.2f}")
+        print(
+            f"Pythia surprisal: μ={surprisal_df['PYTHIA_SURPRISAL'].mean():.2f}, σ={surprisal_df['PYTHIA_SURPRISAL'].std():.2f}")
 
         # 5. Generate all required graphs
         print("\n=== Generating Task 1 Graphs ===")
@@ -802,14 +816,15 @@ def main():
             pickle.dump(results, f)
         print("✓ Results saved to task1_surprisal_data.csv and task1_results.pkl")
 
-        print("\n" + "="*60)
-        print("TASK 1 COMPLETED SUCCESSFULLY!")
-        print("="*60)
+        print("\n" + "=" * 60)
+        print("TASK 1 COMPLETED SUCCESSFULLY (NO CLAMPING)!")
+        print("=" * 60)
         print("✓ WikiText-2 trigram model trained and saved")
-        print("✓ All 7 required graphs generated")
+        print("✓ All 7 required graphs generated with natural surprisal values")
         print("✓ Model comparison completed")
         print("✓ Spillover effects analyzed")
         print("✓ Disagreement examples found")
+        print("✓ NO artificial clamping - natural value distributions preserved")
 
         return {
             'surprisal_df': surprisal_df,
