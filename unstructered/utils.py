@@ -1,724 +1,478 @@
+#!/usr/bin/env python3
+"""
+Simple test for surprisal + entropy analysis
+Concise version with mini test first, then real data processing
+"""
+
 import pandas as pd
-from pathlib import Path
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import warnings
-from tqdm import tqdm
 import numpy as np
-import math
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
+from task_1 import PythiaModel, load_and_preprocess_data
 from scipy import stats
+from scipy.stats import pearsonr
 import statsmodels.api as sm
-import os
-
-warnings.filterwarnings('ignore')
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+from sklearn.linear_model import LinearRegression
 
 
-def load_data():
-    """Load OneStop dataset with proper error handling - FIXED paths"""
-    print("Loading OneStop dataset...")
+def mini_test():
+    """Mini test with simple sentences to verify calculations work"""
+    print("=== MINI TEST: Simple Sentences ===")
 
-    # Try multiple possible paths
-    possible_paths = [
-        "ia_Paragraph.csv",  # Current directory
-        "data/onestop/ia_Paragraph.csv",  # Data subfolder
-        "../data/onestop/ia_Paragraph.csv",  # Parent data folder
-        "onestop/ia_Paragraph.csv",  # Direct onestop folder
-        Path.cwd() / "ia_Paragraph.csv"  # Explicit current directory
+    # Load model once
+    pythia_model = PythiaModel()
+
+    # Test sentences
+    sentences = [
+        "The cat sat on the mat.",
+        "This surprising sentence contains unexpected words.",
+        "Machine learning models predict surprisal values accurately."
     ]
 
-    raw_data = None
-    for file_path in possible_paths:
-        try:
-            file_path = Path(file_path)
-            if file_path.exists():
-                raw_data = pd.read_csv(file_path)
-                print(f"✓ Found data at: {file_path}")
+    print("Testing surprisal (task_1.py) + entropy calculations:")
+
+    for i, sentence in enumerate(sentences, 1):
+        print(f"\n{i}. '{sentence}'")
+        words = sentence.split()
+
+        # Get surprisal using task_1.py method
+        surprisals, probs = pythia_model.get_surprisal_and_probability(sentence)
+
+        # Calculate entropy using simple method
+        entropies = calculate_simple_entropy(sentence, pythia_model.model, pythia_model.tokenizer, pythia_model.device)
+
+        print(f"   Words: {words}")
+        print(f"   Surprisals: {[f'{s:.2f}' for s in surprisals]}")
+        print(f"   Entropies: {[f'{e:.2f}' for e in entropies]}")
+
+        # Check lengths match
+        if len(words) == len(surprisals) == len(entropies):
+            print(f"   ✓ All lengths match ({len(words)} words)")
+        else:
+            print(f"   ❌ Length mismatch: {len(words)} words, {len(surprisals)} surprisals, {len(entropies)} entropies")
+
+    print("\n✓ Mini test complete!")
+    return True
+
+
+def calculate_simple_entropy(sentence, model, tokenizer, device):
+    """Simple entropy calculation that matches word alignment with surprisal"""
+    import torch
+    import torch.nn.functional as F
+
+    # Use same approach as task_1.py for word extraction and alignment
+    words_with_offsets = []
+    cursor = 0
+    for word in sentence.split():
+        begin = sentence.find(word, cursor)
+        end = begin + len(word)
+        words_with_offsets.append((word, begin, end))
+        cursor = end
+
+    # Tokenize with offset mapping (same as task_1.py)
+    encoded = tokenizer(sentence, return_tensors="pt", return_offsets_mapping=True, add_special_tokens=True)
+    input_ids = encoded["input_ids"].to(device)
+    offset_map = encoded["offset_mapping"][0]
+
+    # Get model predictions
+    with torch.no_grad():
+        logits = model(input_ids).logits[0]  # Remove batch dimension
+
+    # Calculate entropy for each token
+    token_entropies = []
+    for i in range(len(logits)):
+        probs = F.softmax(logits[i], dim=0)
+        entropy = -torch.sum(probs * torch.log(probs + 1e-8))
+        token_entropies.append(entropy.item())
+
+    # Align tokens to words using same method as task_1.py
+    word_entropies = []
+    token_pointer = 0
+    total_tokens = len(token_entropies)
+
+    for word, w_start, w_end in words_with_offsets:
+        acc_entropy = 0.0
+        token_count = 0
+
+        while token_pointer < total_tokens:
+            if token_pointer + 1 >= len(offset_map):
                 break
-        except Exception as e:
-            continue
+            t_start, t_end = offset_map[token_pointer + 1].tolist()
+            if t_start >= w_end:
+                break
+            if t_end <= w_start:
+                token_pointer += 1
+                continue
+            acc_entropy += token_entropies[token_pointer]
+            token_count += 1
+            token_pointer += 1
 
-    if raw_data is None:
-        raise FileNotFoundError(
-            f"Could not find ia_Paragraph.csv in any of these locations:\n" +
-            "\n".join([f"  - {p}" for p in possible_paths]) +
-            "\nPlease ensure the file is in your current directory or update the path."
-        )
-
-    print(f"Loaded {len(raw_data)} rows")
-    print(f"Shape: {raw_data.shape}")
-
-    # Check for required columns (from Task 1)
-    required_cols = ['participant_id', 'TRIAL_INDEX', 'IA_LABEL', 'IA_DWELL_TIME', 'IA_ID']
-    missing_cols = [col for col in required_cols if col not in raw_data.columns]
-
-    if missing_cols:
-        print(f"❌ Missing required columns: {missing_cols}")
-        print("Available columns:")
-        for col in raw_data.columns[:10]:  # Show first 10
-            print(f"  - {col}")
-        raise ValueError(f"Dataset missing required columns: {missing_cols}")
-
-    print("✓ All required columns found")
-    return raw_data
-
-
-def load_pythia_70m():
-    """Load Pythia 70M model and tokenizer with error handling"""
-    print("Loading Pythia 70M model...")
-    model_name = "EleutherAI/pythia-70m"
-
-    # Device selection with proper fallback
-    if torch.backends.mps.is_available():
-        device = torch.device('mps')
-        dtype = torch.float16
-    elif torch.cuda.is_available():
-        device = torch.device('cuda')
-        dtype = torch.float16
-    else:
-        device = torch.device('cpu')
-        dtype = torch.float32
-        print("⚠️  Using CPU - this will be slower")
-
-    print(f"Using device: {device}")
-
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-
-        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype, device_map=None)
-        model.to(device).eval()
-
-        print(f"✓ Model loaded successfully on {device}")
-        return model, tokenizer, device
-
-    except Exception as e:
-        print(f"❌ Error loading model: {e}")
-        print("Make sure you have internet connection and sufficient disk space")
-        raise
-
-
-def compute_word_surprisal(context, target_word, model, tokenizer, device):
-    """
-    Compute surprisal of target_word given context - EXACTLY like Task 1
-    """
-    try:
-        # Construct full text
-        if context.strip():
-            full_text = context + " " + target_word
-            context_text = context
+        if token_count > 0:
+            word_entropy = acc_entropy
         else:
-            full_text = target_word
-            context_text = ""
+            word_entropy = 5.0  # Default fallback
 
-        # Tokenize full text with offset mapping
-        encoding = tokenizer(
-            full_text,
-            return_tensors="pt",
-            return_offsets_mapping=True,
-            add_special_tokens=True
-        )
+        word_entropies.append(word_entropy)
 
-        input_ids = encoding["input_ids"].to(device)
-        offset_mapping = encoding["offset_mapping"][0]
-
-        # Get model predictions
-        with torch.no_grad():
-            outputs = model(input_ids)
-            logits = outputs.logits
-            log_probs = F.log_softmax(logits, dim=-1)
-
-        # Find tokens that correspond to the target word
-        target_start = len(context_text)
-        if context_text:
-            target_start += 1  # Account for space
-        target_end = target_start + len(target_word)
-
-        # Find tokens for target word
-        target_token_surprisals = []
-        for i in range(1, input_ids.size(1)):  # Skip BOS token
-            token_start, token_end = offset_mapping[i].tolist()
-
-            # Check if this token overlaps with target word
-            if token_start < target_end and token_end > target_start:
-                token_id = input_ids[0, i].item()
-                token_log_prob = log_probs[0, i - 1, token_id].item()
-                surprisal = -token_log_prob / math.log(10)  # Base 10 like Task 1
-                target_token_surprisals.append(surprisal)
-
-        # Sum surprisals for target word (like Task 1)
-        if target_token_surprisals:
-            word_surprisal = sum(target_token_surprisals)
-        else:
-            word_surprisal = 5.0  # Reasonable fallback for errors
-
-        return word_surprisal  # NO CLAMPING - keep natural values
-
-    except Exception as e:
-        return 5.0  # Reasonable fallback on error
+    return word_entropies
 
 
-def compute_entropy_at_position(context, model, tokenizer, device):
-    """
-    Compute entropy of model's prediction given context
-    """
-    try:
-        if not context.strip():
-            return 6.0  # Reasonable default for empty context
+def load_and_process_simple():
+    """Load and process data using EXACT task_1.py approach"""
+    print("\n=== LOADING AND PROCESSING DATA ===")
 
-        # Tokenize context
-        encoding = tokenizer(context, return_tensors="pt", add_special_tokens=True)
-        input_ids = encoding["input_ids"].to(device)
+    # Use EXACT same approach as task_1.py
+    file_path = "../unstructered/data/onestop/ia_Paragraph.csv"
+    df = load_and_preprocess_data(file_path)  # This does all the preprocessing
 
-        # Get model predictions
-        with torch.no_grad():
-            outputs = model(input_ids)
-            logits = outputs.logits[0, -1, :]  # Last position predictions
+    print(f"After task_1.py preprocessing: {len(df)} rows")
+    print(f"Columns: {df.columns.tolist()}")
+    print(f"Sample data:")
+    print(df.head(3))
 
-        # Calculate entropy using top-k for efficiency
-        top_k_logits, _ = torch.topk(logits, min(1000, logits.size(0)))
-        top_k_probs = F.softmax(top_k_logits, dim=0)
-
-        # Entropy in base 10
-        entropy = -(top_k_probs * torch.log10(top_k_probs + 1e-10)).sum().item()
-
-        return entropy  # NO CLAMPING - keep natural values
-
-    except Exception as e:
-        return 6.0  # Reasonable fallback
-
-
-def process_dataset(df, model, tokenizer, device, max_trials=None):
-    """
-    Process dataset word-by-word like Task 1 - NO BATCHING
-    """
-    print(f"Starting word-by-word processing...")
-    print(f"Input data shape: {df.shape}")
-
-    # EXACT Task 1 preprocessing
-    word_col = 'IA_LABEL'
-    rt_col = 'IA_DWELL_TIME'
-    participant_col = 'participant_id'
-    trial_col = 'TRIAL_INDEX'
-
-    # Basic preprocessing like Task 1
-    df = df.dropna(subset=[word_col, rt_col, 'IA_ID'])
-    df = df[df[rt_col] > 0]
-    df = df[df[word_col].str.len() > 0]
-    df = df[df[word_col].str.isalpha()]  # Only alphabetic words
-
-    # Sort by reading order using IA_ID
-    df = df.sort_values([participant_col, trial_col, 'IA_ID'])
-
-    # Remove outliers (EXACT Task 1 approach)
-    q99 = df[rt_col].quantile(0.99)
-    q01 = df[rt_col].quantile(0.01)
-    df = df[(df[rt_col] >= q01) & (df[rt_col] <= q99)]
-
-    print(f"After preprocessing: {len(df)} words from {df[participant_col].nunique()} participants")
-
-    # Group by participant and trial
-    trials = list(df.groupby([participant_col, trial_col]))
-    total_available = len(trials)
-
-    # Limit trials if specified (for testing)
-    if max_trials is not None:
-        if len(trials) > max_trials:
-            trials = trials[:max_trials]
-            print(f"Processing {max_trials}/{total_available} trials for testing")
-        else:
-            print(f"Processing ALL {len(trials)} trials (less than limit)")
-    else:
-        print(f"Processing ALL {len(trials)} trials (no limit set)")
+    # Initialize model
+    pythia_model = PythiaModel()
 
     results = []
-    processed_trials = 0
-    skipped_trials = 0
+    max_trials = 100  #ToDo change to more trials
+    processed = 0
 
-    # Process each trial (paragraph) word by word
-    for (participant, trial_idx), group in tqdm(trials, desc="Processing trials"):
-        processed_trials += 1
+    print(f"\nProcessing {max_trials} trials using task_1.py approach...")
 
-        # Sort by IA_ID to get correct word order
-        group = group.sort_values('IA_ID').reset_index(drop=True)
+    # Use EXACT same grouping and processing as task_1.py
+    for (participant, trial), group in df.groupby(['PARTICIPANT', 'TRIAL']):
+        if processed >= max_trials:
+            break
 
-        # Filter trial length like Task 1
-        if len(group) < 3 or len(group) > 100:
-            skipped_trials += 1
+        try:
+            # EXACT same approach as task_1.py
+            group = group.reset_index(drop=True)  # This is key!
+            words = group['WORD'].tolist()  # Now this should work
+            reading_times = group['IA_DWELL_TIME'].tolist()
+
+            print(f"Trial {trial}: {len(words)} words - {words[:5]}...")
+
+            # Same filtering as task_1.py
+            if len(words) < 3 or len(words) > 100:
+                continue
+
+            # Create sentence like task_1.py
+            sentence = ' '.join(words)
+
+            # Calculate surprisal using task_1.py method
+            surprisals, probs = pythia_model.get_surprisal_and_probability(sentence)
+
+            # Calculate entropy
+            entropies = calculate_simple_entropy(sentence, pythia_model.model,
+                                                 pythia_model.tokenizer, pythia_model.device)
+
+            # Same alignment as task_1.py
+            min_len = min(len(words), len(surprisals), len(entropies), len(reading_times))
+
+            if min_len < 3:
+                continue
+
+            # Same data storage approach as task_1.py
+            for i in range(min_len):
+                # Same validation as task_1.py
+                surp_val = surprisals[i]
+                ent_val = entropies[i]
+                rt_val = reading_times[i]
+
+                if (not np.isnan(surp_val) and not np.isinf(surp_val) and
+                        not np.isnan(ent_val) and not np.isinf(ent_val) and
+                        not np.isnan(rt_val) and not np.isinf(rt_val) and
+                        surp_val > 0 and ent_val > 0 and rt_val > 0):
+                    results.append({
+                        'participant': participant,
+                        'trial': trial,
+                        'word': words[i],
+                        'surprisal': surp_val,
+                        'entropy': ent_val,
+                        'reading_time': rt_val
+                    })
+
+            processed += 1
+
+        except Exception as e:
+            print(f"Error in trial {trial}: {e}")
             continue
-
-        # Process each word in the trial
-        words = group[word_col].tolist()
-        reading_times = group[rt_col].tolist()
-
-        # Build context incrementally and process each word
-        for word_idx, (word, rt) in enumerate(zip(words, reading_times)):
-            try:
-                # Build context from preceding words
-                context_words = words[:word_idx]  # All preceding words
-                context = ' '.join(context_words) if context_words else ""
-
-                # Compute surprisal of current word given context
-                surprisal = compute_word_surprisal(context, word, model, tokenizer, device)
-
-                # Compute entropy at this position
-                entropy = compute_entropy_at_position(context, model, tokenizer, device)
-
-                # Store result (no artificial clamping)
-                results.append({
-                    'participant_id': participant,
-                    'trial_index': trial_idx,
-                    'word_position': word_idx + 1,
-                    'word': word,
-                    'reading_time': rt,
-                    'pythia_surprisal': surprisal,  # Natural values
-                    'pythia_entropy': entropy,  # Natural values
-                    'sentence_length': len(words),
-                    'context_length': len(context_words)
-                })
-
-            except Exception as e:
-                continue  # Skip problematic words
 
     result_df = pd.DataFrame(results)
-    print(f"✓ Processed {len(result_df)} words from {processed_trials} trials")
-    print(f"  Skipped {skipped_trials} trials due to length filtering")
-    if processed_trials > 0:
-        print(f"  Average words per trial: {len(result_df) / processed_trials:.1f}")
+    print(f"✓ Processed {processed} trials, got {len(result_df)} word observations")
 
-    return result_df
+    if len(result_df) > 0:
+        print(f"\nFirst few results:")
+        print(result_df.head())
+        print(f"\nData ranges:")
+        print(f"  Surprisal: {result_df['surprisal'].min():.2f} - {result_df['surprisal'].max():.2f}")
+        print(f"  Entropy: {result_df['entropy'].min():.2f} - {result_df['entropy'].max():.2f}")
+        print(f"  RT: {result_df['reading_time'].min():.1f} - {result_df['reading_time'].max():.1f} ms")
 
-
-def quick_test_model(model, tokenizer, device):
-    """Test model with FIXED word-by-word calculation"""
-    print("\n" + "=" * 50)
-    print("TESTING PYTHIA MODEL WITH WORD-BY-WORD CALCULATION")
-    print("=" * 50)
-
-    test_cases = [
-        (["The", "cat", "sat", "on", "the", "mat"]),
-        (["This", "is", "a", "simple", "test"]),
-        (["Machine", "learning", "models", "predict", "text"])
-    ]
-
-    for i, words in enumerate(test_cases, 1):
-        print(f"\nTest {i}: {' '.join(words)}")
-
-        surprisals = []
-        entropies = []
-
-        # Process each word with preceding context
-        for word_idx, word in enumerate(words):
-            context_words = words[:word_idx]
-            context = ' '.join(context_words) if context_words else ""
-
-            surprisal = compute_word_surprisal(context, word, model, tokenizer, device)
-            entropy = compute_entropy_at_position(context, model, tokenizer, device)
-
-            surprisals.append(surprisal)
-            entropies.append(entropy)
-
-        print(f"Words: {words}")
-        print(f"Surprisals: {[f'{s:.2f}' for s in surprisals]}")
-        print(f"Entropies: {[f'{e:.2f}' for e in entropies]}")
-
-        # Check for variation
-        if len(set([round(s, 1) for s in surprisals])) > 1:
-            print("✓ Surprisal calculation shows variation")
-        else:
-            print("❌ Surprisals all too similar")
-
-    print("\n" + "=" * 50)
-    print("MODEL TEST COMPLETE")
-    print("=" * 50)
+    return result_df, processed
 
 
-def validate_results(results_df):
-    """Validate the calculated surprisal and entropy values"""
-    print("\n" + "=" * 50)
-    print("VALIDATING RESULTS")
-    print("=" * 50)
-
-    if len(results_df) == 0:
-        print("❌ No data to validate")
-        return False
-
-    # Check for required columns
-    required_cols = ['word', 'pythia_surprisal', 'pythia_entropy', 'reading_time']
-    missing_cols = [col for col in required_cols if col not in results_df.columns]
-    if missing_cols:
-        print(f"❌ Missing columns: {missing_cols}")
-        return False
-
-    # Check data quality
-    surprisal_valid = results_df['pythia_surprisal'].dropna()
-    entropy_valid = results_df['pythia_entropy'].dropna()
-
-    print(f"Data coverage:")
-    print(f"  Total observations: {len(results_df)}")
-    print(f"  Valid surprisal: {len(surprisal_valid)} ({len(surprisal_valid) / len(results_df) * 100:.1f}%)")
-    print(f"  Valid entropy: {len(entropy_valid)} ({len(entropy_valid) / len(results_df) * 100:.1f}%)")
-
-    # Check value ranges and variation
-    if len(surprisal_valid) > 0:
-        surprisal_range_ok = (surprisal_valid.min() >= 0) and (surprisal_valid.max() <= 100.0)  # Natural range
-        surprisal_variation = surprisal_valid.std()
-        print(
-            f"  Surprisal range OK: {'✓' if surprisal_range_ok else '❌'} ({surprisal_valid.min():.2f} - {surprisal_valid.max():.2f})")
-        print(f"  Surprisal variation: {surprisal_variation:.2f} (should be > 1.0)")
-
-        # Check for realistic values
-        realistic_values = (surprisal_valid > 0.5).sum() / len(surprisal_valid)
-        print(f"  Realistic surprisal values: {realistic_values:.1%} (should be > 50%)")
-    else:
-        surprisal_range_ok = False
-        surprisal_variation = 0
-
-    if len(entropy_valid) > 0:
-        entropy_range_ok = (entropy_valid.min() >= 0) and (entropy_valid.max() <= 50.0)  # Natural range
-        print(
-            f"  Entropy range OK: {'✓' if entropy_range_ok else '❌'} ({entropy_valid.min():.2f} - {entropy_valid.max():.2f})")
-    else:
-        entropy_range_ok = False
-
-    # Check minimum viable dataset size
-    min_size_ok = len(results_df) >= 1000
-    print(f"  Minimum dataset size: {'✓' if min_size_ok else '❌'} ({len(results_df)} observations)")
-
-    # Overall validation
-    coverage_ok = (len(surprisal_valid) >= len(results_df) * 0.8 and
-                   len(entropy_valid) >= len(results_df) * 0.8)
-    variation_ok = surprisal_variation > 1.0
-
-    is_valid = (coverage_ok and surprisal_range_ok and entropy_range_ok and
-                min_size_ok and variation_ok)
-
-    print(f"\nOverall validation: {'✓ PASSED' if is_valid else '❌ FAILED'}")
-
-    if not is_valid:
-        print("Issues detected:")
-        if not coverage_ok:
-            print("  - Low data coverage")
-        if not variation_ok:
-            print("  - Insufficient surprisal variation")
-        if not min_size_ok:
-            print("  - Dataset too small")
-        print("⚠️  Continuing with available data...")
-        return len(surprisal_valid) > 500 and variation_ok
-
-    return is_valid
-
-
-def fit_regression_models(df):
-    """
-    Fit three regression models to compare predictors of reading time
-    """
-    print("\n=== FITTING REGRESSION MODELS ===")
-
-    # Clean data
-    clean_df = df.dropna(subset=['pythia_surprisal', 'pythia_entropy', 'reading_time'])
-
-    if len(clean_df) < 1000:
-        print(f"❌ Insufficient data for modeling: {len(clean_df)} observations")
-        return None, clean_df
-
-    print(f"Using {len(clean_df)} clean observations for modeling")
-
-    X_surprisal = clean_df[['pythia_surprisal']].values
-    X_entropy = clean_df[['pythia_entropy']].values
-    X_combined = clean_df[['pythia_surprisal', 'pythia_entropy']].values
-    y = clean_df['reading_time'].values
-
-    models = {}
-
-    try:
-        # 1. Surprisal only model
-        print("\n1. Surprisal-only model:")
-        model_surprisal = LinearRegression().fit(X_surprisal, y)
-        y_pred_surprisal = model_surprisal.predict(X_surprisal)
-        r2_surprisal = r2_score(y, y_pred_surprisal)
-
-        X_surprisal_sm = sm.add_constant(X_surprisal)
-        sm_model_surprisal = sm.OLS(y, X_surprisal_sm).fit()
-
-        print(f"  R² = {r2_surprisal:.4f}")
-        print(f"  Coefficient = {model_surprisal.coef_[0]:.3f}")
-        print(f"  p-value = {sm_model_surprisal.pvalues[1]:.6f}")
-        print(f"  AIC = {sm_model_surprisal.aic:.2f}")
-
-        models['surprisal'] = {
-            'model': model_surprisal,
-            'r2': r2_surprisal,
-            'aic': sm_model_surprisal.aic,
-            'bic': sm_model_surprisal.bic,
-            'coefficients': model_surprisal.coef_,
-            'pvalues': sm_model_surprisal.pvalues[1:],
-            'sm_model': sm_model_surprisal
-        }
-
-        # 2. Entropy only model
-        print("\n2. Entropy-only model:")
-        model_entropy = LinearRegression().fit(X_entropy, y)
-        y_pred_entropy = model_entropy.predict(X_entropy)
-        r2_entropy = r2_score(y, y_pred_entropy)
-
-        X_entropy_sm = sm.add_constant(X_entropy)
-        sm_model_entropy = sm.OLS(y, X_entropy_sm).fit()
-
-        print(f"  R² = {r2_entropy:.4f}")
-        print(f"  Coefficient = {model_entropy.coef_[0]:.3f}")
-        print(f"  p-value = {sm_model_entropy.pvalues[1]:.6f}")
-        print(f"  AIC = {sm_model_entropy.aic:.2f}")
-
-        models['entropy'] = {
-            'model': model_entropy,
-            'r2': r2_entropy,
-            'aic': sm_model_entropy.aic,
-            'bic': sm_model_entropy.bic,
-            'coefficients': model_entropy.coef_,
-            'pvalues': sm_model_entropy.pvalues[1:],
-            'sm_model': sm_model_entropy
-        }
-
-        # 3. Combined model
-        print("\n3. Combined model (Surprisal + Entropy):")
-        model_combined = LinearRegression().fit(X_combined, y)
-        y_pred_combined = model_combined.predict(X_combined)
-        r2_combined = r2_score(y, y_pred_combined)
-
-        X_combined_sm = sm.add_constant(X_combined)
-        sm_model_combined = sm.OLS(y, X_combined_sm).fit()
-
-        print(f"  R² = {r2_combined:.4f}")
-        print(f"  Surprisal coeff = {model_combined.coef_[0]:.3f}")
-        print(f"  Entropy coeff = {model_combined.coef_[1]:.3f}")
-        print(f"  Surprisal p-value = {sm_model_combined.pvalues[1]:.6f}")
-        print(f"  Entropy p-value = {sm_model_combined.pvalues[2]:.6f}")
-        print(f"  AIC = {sm_model_combined.aic:.2f}")
-
-        models['combined'] = {
-            'model': model_combined,
-            'r2': r2_combined,
-            'aic': sm_model_combined.aic,
-            'bic': sm_model_combined.bic,
-            'coefficients': model_combined.coef_,
-            'pvalues': sm_model_combined.pvalues[1:],
-            'sm_model': sm_model_combined
-        }
-
-        # Compare to Task 1 expectations
-        print(f"\n=== COMPARISON TO TASK 1 ===")
-        print(f"Expected surprisal R² (from Task 1): ~0.026")
-        print(f"Current surprisal R²: {r2_surprisal:.4f}")
-        if r2_surprisal > 0.001:
-            print(f"Relative strength: {r2_surprisal / 0.026 * 100:.1f}% of Task 1 effect")
-        else:
-            print("R² too low for meaningful comparison")
-
-        return models, clean_df
-
-    except Exception as e:
-        print(f"❌ Error fitting models: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, clean_df
-
-
-def compare_models(models):
-    """Compare the three models using statistical tests and information criteria"""
-    print("\n=== MODEL COMPARISON ===")
-
-    if not models:
-        print("❌ No models to compare")
+def test_hypotheses_simple(df):
+    """Comprehensive hypothesis testing with focus on key comparisons"""
+    if len(df) < 100:
+        print(f"❌ Need more data for testing (have {len(df)}, need 100+)")
         return None
 
-    # Extract performance metrics
-    results = []
-    for name, model_info in models.items():
-        results.append({
-            'Model': name.title(),
-            'R²': model_info['r2'],
-            'AIC': model_info['aic'],
-            'BIC': model_info['bic'],
-            'Coefficients': len(model_info['coefficients'])
-        })
+    print(f"\n=== COMPREHENSIVE HYPOTHESIS TESTING ({len(df)} observations) ===")
 
-    comparison_df = pd.DataFrame(results)
-    print("\nModel Performance Summary:")
-    print(comparison_df.to_string(index=False, float_format='%.4f'))
+    # Prepare data
+    X_surp = df[['surprisal']].values
+    X_ent = df[['entropy']].values
+    X_both = df[['surprisal', 'entropy']].values
+    y = df['reading_time'].values
 
-    # Determine best model by different criteria
-    best_r2 = comparison_df.loc[comparison_df['R²'].idxmax(), 'Model']
-    best_aic = comparison_df.loc[comparison_df['AIC'].idxmin(), 'Model']
-    best_bic = comparison_df.loc[comparison_df['BIC'].idxmin(), 'Model']
+    # Fit models
+    model_surp = LinearRegression().fit(X_surp, y)
+    model_ent = LinearRegression().fit(X_ent, y)
+    model_both = LinearRegression().fit(X_both, y)
 
-    print(f"\nBest models:")
-    print(f"  Highest R²: {best_r2} (R² = {comparison_df['R²'].max():.4f})")
-    print(f"  Lowest AIC: {best_aic} (AIC = {comparison_df['AIC'].min():.2f})")
-    print(f"  Lowest BIC: {best_bic} (BIC = {comparison_df['BIC'].min():.2f})")
+    # Get R² values
+    r2_surp = model_surp.score(X_surp, y)
+    r2_ent = model_ent.score(X_ent, y)
+    r2_both = model_both.score(X_both, y)
 
-    # Calculate R² improvements
-    r2_surprisal = models['surprisal']['r2']
-    r2_entropy = models['entropy']['r2']
-    r2_combined = models['combined']['r2']
+    # Statistical models for p-values and F-tests
+    sm_surp = sm.OLS(y, sm.add_constant(X_surp)).fit()
+    sm_ent = sm.OLS(y, sm.add_constant(X_ent)).fit()
+    sm_both = sm.OLS(y, sm.add_constant(X_both)).fit()
 
-    print(f"\nR² Improvements:")
-    if r2_surprisal > 0:
-        improvement_entropy = ((r2_entropy - r2_surprisal) / r2_surprisal) * 100
-        improvement_combined = ((r2_combined - r2_surprisal) / r2_surprisal) * 100
+    print(f"MODEL PERFORMANCE:")
+    print(f"  1. Surprisal only: R² = {r2_surp:.4f}, p = {sm_surp.pvalues[1]:.2e}")
+    print(f"  2. Entropy only:   R² = {r2_ent:.4f}, p = {sm_ent.pvalues[1]:.2e}")
+    print(f"  3. Combined:       R² = {r2_both:.4f}")
+    print(f"     - Surprisal p = {sm_both.pvalues[1]:.2e}")
+    print(f"     - Entropy p   = {sm_both.pvalues[2]:.2e}")
+
+    # KEY HYPOTHESIS TESTS WITH P-VALUES
+    print(f"\n🧪 KEY HYPOTHESIS TESTS WITH P-VALUES:")
+
+    # H1: Surprisal vs Entropy - Which is better predictor?
+    print(f"\nH1: Surprisal vs Entropy (which predicts reading times better?)")
+    print(f"   → Surprisal: R² = {r2_surp:.4f}, p = {sm_surp.pvalues[1]:.2e}")
+    print(f"   → Entropy:   R² = {r2_ent:.4f}, p = {sm_ent.pvalues[1]:.2e}")
+
+    if r2_surp > r2_ent:
+        advantage = ((r2_surp - r2_ent) / r2_ent) * 100
+        print(f"   → SURPRISAL WINS: {advantage:.1f}% better R² than entropy")
     else:
-        improvement_entropy = 0
-        improvement_combined = 0
+        advantage = ((r2_ent - r2_surp) / r2_surp) * 100
+        print(f"   → ENTROPY WINS: {advantage:.1f}% better R² than surprisal")
 
-    print(f"  Entropy vs Surprisal: {improvement_entropy:+.1f}%")
-    print(f"  Combined vs Surprisal: {improvement_combined:+.1f}%")
+    # Statistical significance check
+    surp_significant = sm_surp.pvalues[1] < 0.05
+    ent_significant = sm_ent.pvalues[1] < 0.05
+    print(f"   → Surprisal significant: {'YES' if surp_significant else 'NO'} (p = {sm_surp.pvalues[1]:.2e})")
+    print(f"   → Entropy significant:   {'YES' if ent_significant else 'NO'} (p = {sm_ent.pvalues[1]:.2e})")
 
-    print(f"\nAdditional R² from entropy: {r2_combined - r2_surprisal:.4f}")
+    # H2: Does entropy add value beyond surprisal?
+    print(f"\nH2: Does entropy add predictive power beyond surprisal?")
+    improvement = r2_both - r2_surp
+    pct_improvement = (improvement / r2_surp) * 100
 
-    return comparison_df
+    # F-test for nested models (surprisal vs surprisal+entropy)
+    f_stat = ((sm_surp.ssr - sm_both.ssr) / 1) / (sm_both.ssr / sm_both.df_resid)
+    f_pvalue = stats.f.sf(f_stat, 1, sm_both.df_resid)
+
+    # Entropy coefficient significance in combined model
+    entropy_coef_pvalue = sm_both.pvalues[2]
+    entropy_significant_combined = entropy_coef_pvalue < 0.05
+
+    print(f"   → R² improvement: {improvement:.4f} ({pct_improvement:.1f}% better)")
+    print(f"   → F-test p-value: {f_pvalue:.2e}")
+    print(f"   → Entropy coefficient p-value: {entropy_coef_pvalue:.2e}")
+
+    if improvement > 0.001 and f_pvalue < 0.05 and entropy_significant_combined:
+        print(f"   → CONCLUSION: YES - Entropy adds significant value!")
+        print(f"   → Statistical evidence: F-test significant (p < 0.05)")
+        print(f"   → Practical evidence: {pct_improvement:.1f}% improvement in R²")
+    elif improvement > 0.001 and (f_pvalue < 0.05 or entropy_significant_combined):
+        print(f"   → CONCLUSION: WEAK EVIDENCE - Some support for entropy adding value")
+        f_sig = "significant" if f_pvalue < 0.05 else "not significant"
+        coef_sig = "significant" if entropy_significant_combined else "not significant"
+        print(f"   → F-test: {f_sig}, Entropy coefficient: {coef_sig}")
+    else:
+        print(f"   → CONCLUSION: NO - Entropy does not add significant value")
+        print(f"   → Statistical evidence: F-test p = {f_pvalue:.3f}, Coef p = {entropy_coef_pvalue:.3f}")
+
+    # H3: Is the combined model significantly better than each single model?
+    print(f"\nH3: Statistical significance of model comparisons")
+
+    # Combined vs Surprisal-only (already calculated above)
+    print(f"   → Combined vs Surprisal-only:")
+    print(f"     • F-test p-value: {f_pvalue:.2e}")
+    print(f"     • Significant: {'YES' if f_pvalue < 0.05 else 'NO'}")
+
+    # Combined vs Entropy-only
+    f_stat_ent = ((sm_ent.ssr - sm_both.ssr) / 1) / (sm_both.ssr / sm_both.df_resid)
+    f_pvalue_ent = stats.f.sf(f_stat_ent, 1, sm_both.df_resid)
+
+    print(f"   → Combined vs Entropy-only:")
+    print(f"     • F-test p-value: {f_pvalue_ent:.2e}")
+    print(f"     • Significant: {'YES' if f_pvalue_ent < 0.05 else 'NO'}")
+
+    # Surprisal vs Entropy direct comparison (using correlation test)
+    surp_rt_corr, surp_rt_pvalue = pearsonr(df['surprisal'], df['reading_time'])
+    ent_rt_corr, ent_rt_pvalue = pearsonr(df['entropy'], df['reading_time'])
+
+    print(f"   → Direct correlation comparison:")
+    print(f"     • Surprisal-RT: r = {surp_rt_corr:.3f}, p = {surp_rt_pvalue:.2e}")
+    print(f"     • Entropy-RT:   r = {ent_rt_corr:.3f}, p = {ent_rt_pvalue:.2e}")
+
+    # Effect size (Cohen's f²)
+    cohens_f2 = improvement / r2_surp if r2_surp > 0 else 0
+    if cohens_f2 >= 0.35:
+        effect_size = "LARGE"
+    elif cohens_f2 >= 0.15:
+        effect_size = "MEDIUM"
+    elif cohens_f2 >= 0.02:
+        effect_size = "SMALL"
+    else:
+        effect_size = "NEGLIGIBLE"
+
+    print(f"\nEFFECT SIZE ANALYSIS:")
+    print(f"   → Cohen's f² = {cohens_f2:.3f} ({effect_size} effect)")
+    print(f"   → Interpretation:")
+    if effect_size == "LARGE":
+        print(f"     • Large practical significance - entropy substantially improves prediction")
+    elif effect_size == "MEDIUM":
+        print(f"     • Medium practical significance - entropy meaningfully improves prediction")
+    elif effect_size == "SMALL":
+        print(f"     • Small practical significance - entropy slightly improves prediction")
+    else:
+        print(f"     • Negligible practical significance - entropy barely improves prediction")
+
+    # Overall summary with p-values
+    print(f"\n📊 STATISTICAL SUMMARY:")
+    print(f"   → Best single predictor: {'Surprisal' if r2_surp > r2_ent else 'Entropy'}")
+    print(f"   → Entropy adds significant value: {'YES' if f_pvalue < 0.05 and entropy_significant_combined else 'NO'}")
+    print(f"   → Key p-values:")
+    print(f"     • Surprisal significance: p = {sm_surp.pvalues[1]:.2e}")
+    print(f"     • Entropy significance: p = {sm_ent.pvalues[1]:.2e}")
+    print(f"     • Entropy in combined model: p = {entropy_coef_pvalue:.2e}")
+    print(f"     • Model improvement F-test: p = {f_pvalue:.2e}")
+
+    return {
+        'r2_surp': r2_surp,
+        'r2_ent': r2_ent,
+        'r2_both': r2_both,
+        'improvement': improvement,
+        'f_pvalue': f_pvalue,
+        'entropy_pvalue': entropy_coef_pvalue,
+        'surprisal_pvalue': sm_surp.pvalues[1],
+        'entropy_single_pvalue': sm_ent.pvalues[1],
+        'effect_size': effect_size,
+        'cohens_f2': cohens_f2
+    }
 
 
-def test_hypotheses(models, df):
-    """Test specific hypotheses about entropy and surprisal effects"""
-    print("\n=== HYPOTHESIS TESTING ===")
-
-    if not models:
-        print("❌ No models for hypothesis testing")
+def create_simple_plot(df):
+    """Create simple visualization"""
+    if len(df) < 10:
+        print("Not enough data for plotting")
         return
 
-    surprisal_model = models['surprisal']['sm_model']
-    entropy_model = models['entropy']['sm_model']
-    combined_model = models['combined']['sm_model']
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
-    print("\nHypothesis 1: Surprisal significantly predicts reading time")
-    surprisal_significant = surprisal_model.pvalues[1] < 0.05
-    print(f"  Result: {'✓ SUPPORTED' if surprisal_significant else '❌ NOT SUPPORTED'}")
-    print(f"  p-value: {surprisal_model.pvalues[1]:.6f}")
-    print(f"  Effect size (β): {surprisal_model.params[1]:.3f}")
+    # Surprisal vs RT
+    axes[0].scatter(df['surprisal'], df['reading_time'], alpha=0.5, s=10)
+    axes[0].set_xlabel('Surprisal')
+    axes[0].set_ylabel('Reading Time (ms)')
+    axes[0].set_title(f'Surprisal vs RT (r={df["surprisal"].corr(df["reading_time"]):.3f})')
 
-    print("\nHypothesis 2: Entropy significantly predicts reading time")
-    entropy_significant = entropy_model.pvalues[1] < 0.05
-    print(f"  Result: {'✓ SUPPORTED' if entropy_significant else '❌ NOT SUPPORTED'}")
-    print(f"  p-value: {entropy_model.pvalues[1]:.6f}")
-    print(f"  Effect size (β): {entropy_model.params[1]:.3f}")
+    # Entropy vs RT
+    axes[1].scatter(df['entropy'], df['reading_time'], alpha=0.5, s=10, color='orange')
+    axes[1].set_xlabel('Entropy')
+    axes[1].set_ylabel('Reading Time (ms)')
+    axes[1].set_title(f'Entropy vs RT (r={df["entropy"].corr(df["reading_time"]):.3f})')
 
-    print("\nHypothesis 3: Combined model better than surprisal alone")
-    r2_improvement = models['combined']['r2'] - models['surprisal']['r2']
-    improvement_significant = r2_improvement > 0.001
+    # Surprisal vs Entropy
+    axes[2].scatter(df['surprisal'], df['entropy'], alpha=0.5, s=10, color='green')
+    axes[2].set_xlabel('Surprisal')
+    axes[2].set_ylabel('Entropy')
+    axes[2].set_title(f'Surprisal vs Entropy (r={df["surprisal"].corr(df["entropy"]):.3f})')
 
-    # F-test for nested models
-    try:
-        f_stat = ((combined_model.ssr - surprisal_model.ssr) / 1) / (combined_model.ssr / combined_model.df_resid)
-        f_pvalue = stats.f.sf(f_stat, 1, combined_model.df_resid) if f_stat > 0 else 1.0
-    except:
-        f_pvalue = 1.0
-
-    print(f"  Result: {'✓ SUPPORTED' if improvement_significant and f_pvalue < 0.05 else '❌ NOT SUPPORTED'}")
-    print(f"  R² improvement: {r2_improvement:.4f}")
-    print(f"  F-test p-value: {f_pvalue:.6f}")
-
-    print("\nHypothesis 4: Entropy adds unique predictive power beyond surprisal")
-    entropy_in_combined_significant = combined_model.pvalues[2] < 0.05
-    print(f"  Result: {'✓ SUPPORTED' if entropy_in_combined_significant else '❌ NOT SUPPORTED'}")
-    print(f"  Entropy p-value in combined model: {combined_model.pvalues[2]:.6f}")
-    print(f"  Entropy coefficient: {combined_model.params[2]:.3f}")
-
-    # Effect size comparison
-    print(f"\nEffect Size Comparison (in combined model):")
-    surprisal_beta = abs(combined_model.params[1])
-    entropy_beta = abs(combined_model.params[2])
-
-    if surprisal_beta > entropy_beta:
-        ratio = surprisal_beta / entropy_beta if entropy_beta > 0 else float('inf')
-        print(f"  Surprisal effect {ratio:.1f}x stronger than entropy")
-    else:
-        ratio = entropy_beta / surprisal_beta if surprisal_beta > 0 else float('inf')
-        print(f"  Entropy effect {ratio:.1f}x stronger than surprisal")
+    plt.tight_layout()
+    plt.savefig('simple_entropy_analysis.png', dpi=150, bbox_inches='tight')
+    plt.show()
+    print("✓ Plot saved as 'simple_entropy_analysis.png'")
 
 
-def create_visualization(models, df):
-    """Create visualization comparing model predictions"""
-    if not models:
-        print("❌ No models for visualization")
+def main():
+    """Main function - concise test"""
+    print("=== SIMPLE SURPRISAL + ENTROPY TEST ===")
+
+    # 1. Mini test first
+    if not mini_test():
+        print("❌ Mini test failed")
         return
 
-    print("\n=== CREATING VISUALIZATIONS ===")
+    # 2. Process real data
+    df, processed_trials = load_and_process_simple()
 
-    try:
-        # Sample data for visualization (to avoid overplotting)
-        sample_size = min(10000, len(df))
-        sample_df = df.sample(sample_size, random_state=42)
+    if len(df) == 0:
+        print("❌ No data processed successfully")
+        return
 
-        fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-        fig.suptitle('Model Comparison: Surprisal vs Entropy vs Combined', fontsize=16)
+    # 3. Test hypotheses
+    results = test_hypotheses_simple(df)
 
-        # Model performance comparison
-        ax1 = axes[0, 0]
-        model_names = ['Surprisal', 'Entropy', 'Combined']
-        r2_values = [models['surprisal']['r2'], models['entropy']['r2'], models['combined']['r2']]
-        bars = ax1.bar(model_names, r2_values, color=['blue', 'green', 'purple'])
-        ax1.set_ylabel('R² Score')
-        ax1.set_title('Model Performance Comparison')
-        ax1.set_ylim(0, max(r2_values) * 1.2 if max(r2_values) > 0 else 0.01)
+    # 4. Create plot
+    create_simple_plot(df)
 
-        # Add value labels on bars
-        for bar, value in zip(bars, r2_values):
-            ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + max(r2_values) * 0.01,
-                     f'{value:.4f}', ha='center', va='bottom')
+    # 5. Save results
+    df.to_csv('simple_test_results.csv', index=False)
+    print(f"\n✓ Results saved to 'simple_test_results.csv'")
 
-        # Surprisal vs Reading Time
-        ax2 = axes[0, 1]
-        ax2.scatter(sample_df['pythia_surprisal'], sample_df['reading_time'], alpha=0.3, s=1)
-        ax2.set_xlabel('Surprisal (base 10)')
-        ax2.set_ylabel('Reading Time (ms)')
-        corr = df['pythia_surprisal'].corr(df['reading_time'])
-        ax2.set_title(f'Surprisal vs Reading Time (r = {corr:.3f})')
+    # 6. Summary
+    print(f"\n=== FINAL SUMMARY ===")
+    if results:
+        print(f"✅ SUCCESS: Processed {len(df)} word observations from {processed_trials} trials")
+        print(f"   📊 Model Performance:")
+        print(f"      • Surprisal only: R² = {results['r2_surp']:.4f}")
+        print(f"      • Entropy only:   R² = {results['r2_ent']:.4f}")
+        print(f"      • Combined:       R² = {results['r2_both']:.4f}")
 
-        # Entropy vs Reading Time
-        ax3 = axes[1, 0]
-        ax3.scatter(sample_df['pythia_entropy'], sample_df['reading_time'], alpha=0.3, s=1, color='green')
-        ax3.set_xlabel('Entropy (base 10)')
-        ax3.set_ylabel('Reading Time (ms)')
-        corr = df['pythia_entropy'].corr(df['reading_time'])
-        ax3.set_title(f'Entropy vs Reading Time (r = {corr:.3f})')
+        # Key findings
+        improvement = results['r2_both'] - results['r2_surp']
+        pct_improvement = (improvement / results['r2_surp']) * 100
 
-        # Combined model residuals
-        ax4 = axes[1, 1]
-        combined_model = models['combined']['model']
-        X_combined = sample_df[['pythia_surprisal', 'pythia_entropy']].values
-        y_pred = combined_model.predict(X_combined)
-        residuals = sample_df['reading_time'].values - y_pred
+        print(f"\n   🔍 KEY FINDINGS:")
+        if results['r2_surp'] > results['r2_ent']:
+            print(f"      • Surprisal is better single predictor than entropy")
+        else:
+            print(f"      • Entropy is better single predictor than surprisal")
 
-        ax4.scatter(y_pred, residuals, alpha=0.3, s=1, color='purple')
-        ax4.axhline(y=0, color='red', linestyle='--')
-        ax4.set_xlabel('Predicted Reading Time (ms)')
-        ax4.set_ylabel('Residuals (ms)')
-        ax4.set_title('Combined Model Residuals')
+        if improvement > 0.001 and results.get('f_pvalue', 1) < 0.05:
+            print(f"      • ✅ Entropy DOES add significant predictive power!")
+            print(f"      • 📈 Improvement: +{improvement:.4f} R² ({pct_improvement:.1f}% better)")
+            print(f"      • 📏 Effect size: {results.get('effect_size', 'unknown').lower()}")
+        else:
+            print(f"      • ❌ Entropy does NOT add significant predictive power")
 
-        plt.tight_layout()
-        plt.savefig('entropy_analysis_results.png', dpi=300, bbox_inches='tight')
-        plt.show()
+        # Compare to task_1.py
+        task1_pythia_r2 = 0.013  # From task_1.py results
+        current_surprisal_r2 = results['r2_surp']
 
-        print("✓ Visualization saved as 'entropy_analysis_results.png'")
+        print(f"\n   📋 COMPARISON TO TASK 1:")
+        print(f"      • Task 1 Pythia R²: {task1_pythia_r2:.4f}")
+        print(f"      • Our Surprisal R²: {current_surprisal_r2:.4f}")
+        print(f"      • Relative effect: {current_surprisal_r2 / task1_pythia_r2:.1f}x stronger")
 
-    except Exception as e:
-        print(f"❌ Visualization error: {e}")
-        import traceback
-        traceback.print_exc()
+        if results['r2_both'] > current_surprisal_r2:
+            added_variance = (results['r2_both'] - current_surprisal_r2) * 100
+            print(f"      • 🆕 Entropy adds {added_variance:.2f}% more explained variance!")
 
+    else:
+        print(f"⚠️ Partial success: Data processed but insufficient for modeling")
+        print(f"   • Processed {len(df)} observations")
+        print(f"   • Try increasing max_trials for more data")
 
-# Legacy compatibility functions
-def compute_word_surprisal_batch(sentences, model, tokenizer, device):
-    """Legacy function - now processes word by word"""
-    return []
+    return df
 
 
-def calculate_entropy_fast(sentence, model, tokenizer, device):
-    """Legacy function - now processes word by word"""
-    return []
+if __name__ == "__main__":
+    results = main()
