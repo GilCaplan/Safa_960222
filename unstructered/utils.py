@@ -133,15 +133,16 @@ def load_and_process_simple():
     pythia_model = PythiaModel()
 
     results = []
-    max_trials = 100  #ToDo change to more trials
+    max_trials = 10078  #ToDo change to more trials, total there are 10078
     processed = 0
 
     print(f"\nProcessing {max_trials} trials using task_1.py approach...")
 
     # Use EXACT same grouping and processing as task_1.py
     for (participant, trial), group in df.groupby(['PARTICIPANT', 'TRIAL']):
-        if processed >= max_trials:
-            break
+        if processed is not None:
+            if processed >= max_trials:
+                break
 
         try:
             # EXACT same approach as task_1.py
