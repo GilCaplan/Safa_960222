@@ -133,7 +133,7 @@ def load_and_process_simple():
     pythia_model = PythiaModel()
 
     results = []
-    max_trials = 10078  #ToDo change to more trials, total there are 10078
+    max_trials = 10078  # change to more trials, total there are 10078
     processed = 0
 
     print(f"\nProcessing {max_trials} trials using task_1.py approach...")
@@ -163,7 +163,7 @@ def load_and_process_simple():
             surprisals, probs = pythia_model.get_surprisal_and_probability(sentence)
 
             # Calculate entropy
-            entropies = calculate_simple_entropy(sentence, pythia_model.model,
+            entropies = calculate_entropy(sentence, pythia_model.model,
                                                  pythia_model.tokenizer, pythia_model.device)
 
             # Same alignment as task_1.py
