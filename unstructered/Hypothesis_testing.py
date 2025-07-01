@@ -9,21 +9,21 @@ def main():
         return
 
     # 2. Process real data
-    df, processed_trials = load_and_process_simple()
+    df, processed_trials = load_and_process_()
 
     if len(df) == 0:
         print("❌ No data processed successfully")
         return
 
     # 3. Test hypotheses
-    results = test_hypotheses_simple(df)
+    results = test_hypotheses_(df)
 
     # 4. Create plot
-    create_simple_plot(df)
+    create__plot(df)
 
     # 5. Save results
-    df.to_csv('simple_test_results.csv', index=False)
-    print(f"\n✓ Results saved to 'simple_test_results.csv'")
+    df.to_csv('_test_results.csv', index=False)
+    print(f"\n✓ Results saved to '_test_results.csv'")
 
     # 6. Summary
     print(f"\n=== FINAL SUMMARY ===")
