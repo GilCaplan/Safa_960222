@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Simple test for surprisal + entropy analysis
+ test for surprisal + entropy analysis
 Concise version with mini test first, then real data processing
 """
 
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from task_1 import PythiaModel, load_and_preprocess_data
+from pythia_processor import PythiaModel, load_and_preprocess_data, calculate_entropy
 from scipy import stats
 from scipy.stats import pearsonr
 import statsmodels.api as sm
@@ -15,8 +15,8 @@ from sklearn.linear_model import LinearRegression
 
 
 def mini_test():
-    """Mini test with simple sentences to verify calculations work"""
-    print("=== MINI TEST: Simple Sentences ===")
+    """Mini test with sentences to verify calculation's work"""
+    print("=== MINI TEST: Sentences ===")
 
     # Load model once
     pythia_model = PythiaModel()
@@ -28,16 +28,16 @@ def mini_test():
         "Machine learning models predict surprisal values accurately."
     ]
 
-    print("Testing surprisal (task_1.py) + entropy calculations:")
+    print("Testing surprisal (pythia_processor.py) + entropy calculations:")
 
     for i, sentence in enumerate(sentences, 1):
         print(f"\n{i}. '{sentence}'")
         words = sentence.split()
 
-        # Get surprisal using task_1.py method
+        # Get surprisal using pythia_processor.py method
         surprisals, probs = pythia_model.get_surprisal_and_probability(sentence)
 
-        # Calculate entropy using simple method
+        # Calculate entropy using  method
         entropies = calculate_entropy(sentence, pythia_model.model, pythia_model.tokenizer, pythia_model.device)
 
         print(f"   Words: {words}")
@@ -54,77 +54,15 @@ def mini_test():
     return True
 
 
-def calculate_entropy(sentence, model, tokenizer, device):
-    """Simple entropy calculation that matches word alignment with surprisal"""
-    import torch
-    import torch.nn.functional as F
-
-    # Use same approach as task_1.py for word extraction and alignment
-    words_with_offsets = []
-    cursor = 0
-    for word in sentence.split():
-        begin = sentence.find(word, cursor)
-        end = begin + len(word)
-        words_with_offsets.append((word, begin, end))
-        cursor = end
-
-    # Tokenize with offset mapping (same as task_1.py)
-    encoded = tokenizer(sentence, return_tensors="pt", return_offsets_mapping=True, add_special_tokens=True)
-    input_ids = encoded["input_ids"].to(device)
-    offset_map = encoded["offset_mapping"][0]
-
-    # Get model predictions
-    with torch.no_grad():
-        logits = model(input_ids).logits[0]  # Remove batch dimension
-
-    # Calculate entropy for each token
-    token_entropies = []
-    for i in range(len(logits)):
-        probs = F.softmax(logits[i], dim=0)
-        entropy = -torch.sum(probs * torch.log(probs + 1e-8))
-        token_entropies.append(entropy.item())
-
-    # Align tokens to words using same method as task_1.py
-    word_entropies = []
-    token_pointer = 0
-    total_tokens = len(token_entropies)
-
-    for word, w_start, w_end in words_with_offsets:
-        acc_entropy = 0.0
-        token_count = 0
-
-        while token_pointer < total_tokens:
-            if token_pointer + 1 >= len(offset_map):
-                break
-            t_start, t_end = offset_map[token_pointer + 1].tolist()
-            if t_start >= w_end:
-                break
-            if t_end <= w_start:
-                token_pointer += 1
-                continue
-            acc_entropy += token_entropies[token_pointer]
-            token_count += 1
-            token_pointer += 1
-
-        if token_count > 0:
-            word_entropy = acc_entropy
-        else:
-            word_entropy = 5.0  # Default fallback
-
-        word_entropies.append(word_entropy)
-
-    return word_entropies
-
-
-def load_and_process_simple():
-    """Load and process data using EXACT task_1.py approach"""
+def load_and_process_():
+    """Load and process data using EXACT pythia_processor.py approach"""
     print("\n=== LOADING AND PROCESSING DATA ===")
 
-    # Use EXACT same approach as task_1.py
+    # Use EXACT same approach as pythia_processor.py
     file_path = "../unstructered/data/onestop/ia_Paragraph.csv"
     df = load_and_preprocess_data(file_path)  # This does all the preprocessing
 
-    print(f"After task_1.py preprocessing: {len(df)} rows")
+    print(f"After pythia_processor.py preprocessing: {len(df)} rows")
     print(f"Columns: {df.columns.tolist()}")
     print(f"Sample data:")
     print(df.head(3))
@@ -136,45 +74,45 @@ def load_and_process_simple():
     max_trials = 10078  # change to more trials, total there are 10078
     processed = 0
 
-    print(f"\nProcessing {max_trials} trials using task_1.py approach...")
+    print(f"\nProcessing {max_trials} trials using pythia_processor.py approach...")
 
-    # Use EXACT same grouping and processing as task_1.py
+    # Use EXACT same grouping and processing as pythia_processor.py
     for (participant, trial), group in df.groupby(['PARTICIPANT', 'TRIAL']):
         if processed is not None:
             if processed >= max_trials:
                 break
 
         try:
-            # EXACT same approach as task_1.py
+            # EXACT same approach as pythia_processor.py
             group = group.reset_index(drop=True)  # This is key!
             words = group['WORD'].tolist()  # Now this should work
             reading_times = group['IA_DWELL_TIME'].tolist()
 
             print(f"Trial {trial}: {len(words)} words - {words[:5]}...")
 
-            # Same filtering as task_1.py
+            # Same filtering as pythia_processor.py
             if len(words) < 3 or len(words) > 100:
                 continue
 
-            # Create sentence like task_1.py
+            # Create sentence like pythia_processor.py
             sentence = ' '.join(words)
 
-            # Calculate surprisal using task_1.py method
+            # Calculate surprisal using pythia_processor.py method
             surprisals, probs = pythia_model.get_surprisal_and_probability(sentence)
 
             # Calculate entropy
             entropies = calculate_entropy(sentence, pythia_model.model,
                                                  pythia_model.tokenizer, pythia_model.device)
 
-            # Same alignment as task_1.py
+            # Same alignment as pythia_processor.py
             min_len = min(len(words), len(surprisals), len(entropies), len(reading_times))
 
             if min_len < 3:
                 continue
 
-            # Same data storage approach as task_1.py
+            # Same data storage approach as pythia_processor.py
             for i in range(min_len):
-                # Same validation as task_1.py
+                # Same validation as pythia_processor.py
                 surp_val = surprisals[i]
                 ent_val = entropies[i]
                 rt_val = reading_times[i]
@@ -212,7 +150,7 @@ def load_and_process_simple():
     return result_df, processed
 
 
-def test_hypotheses_simple(df):
+def test_hypotheses_(df):
     """Comprehensive hypothesis testing with focus on key comparisons"""
     if len(df) < 100:
         print(f"❌ Need more data for testing (have {len(df)}, need 100+)")
@@ -370,8 +308,8 @@ def test_hypotheses_simple(df):
     }
 
 
-def create_simple_plot(df):
-    """Create simple visualization"""
+def create__plot(df):
+    """Create  visualization"""
     if len(df) < 10:
         print("Not enough data for plotting")
         return
@@ -397,6 +335,6 @@ def create_simple_plot(df):
     axes[2].set_title(f'Surprisal vs Entropy (r={df["surprisal"].corr(df["entropy"]):.3f})')
 
     plt.tight_layout()
-    plt.savefig('simple_entropy_analysis.png', dpi=150, bbox_inches='tight')
+    plt.savefig('entropy_analysis.png', dpi=150, bbox_inches='tight')
     plt.show()
-    print("✓ Plot saved as 'simple_entropy_analysis.png'")
+    print("✓ Plot saved as '_entropy_analysis.png'")

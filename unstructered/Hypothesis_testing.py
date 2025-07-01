@@ -51,8 +51,8 @@ def main():
         else:
             print(f"      • ❌ Entropy does NOT add significant predictive power")
 
-        # Compare to task_1.py
-        task1_pythia_r2 = 0.013  # From task_1.py results
+        # Compare to pythia_processor.py
+        task1_pythia_r2 = 0.013  # From pythia_processor.py results
         current_surprisal_r2 = results['r2_surp']
 
         print(f"\n   📋 COMPARISON TO TASK 1:")
