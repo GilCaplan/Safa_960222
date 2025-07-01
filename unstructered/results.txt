@@ -1,0 +1,85 @@
+
+First few results:
+  participant  trial        word  surprisal   entropy  reading_time
+0     l10_202      1     Leading   0.871952  5.415402           508
+1     l10_202      1       water   3.657540  7.994276           534
+2     l10_202      1  scientists   2.547961  7.353338           236
+3     l10_202      1      issued   4.815400  4.638989           168
+4     l10_202      1         one   2.816350  3.234753           287
+
+Data ranges:
+  Surprisal: 0.00 - 20.62
+  Entropy: 0.02 - 35.40
+  RT: 60.0 - 1225.0 ms
+
+=== COMPREHENSIVE HYPOTHESIS TESTING (560644 observations) ===
+MODEL PERFORMANCE:
+  1. Surprisal only: R² = 0.0143, p = 0.00e+00
+  2. Entropy only:   R² = 0.0095, p = 0.00e+00
+  3. Combined:       R² = 0.0175
+     - Surprisal p = 0.00e+00
+     - Entropy p   = 0.00e+00
+
+🧪 KEY HYPOTHESIS TESTS WITH P-VALUES:
+
+H1: Surprisal vs Entropy (which predicts reading times better?)
+   → Surprisal: R² = 0.0143, p = 0.00e+00
+   → Entropy:   R² = 0.0095, p = 0.00e+00
+   → SURPRISAL WINS: 50.4% better R² than entropy
+   → Surprisal significant: YES (p = 0.00e+00)
+   → Entropy significant:   YES (p = 0.00e+00)
+
+H2: Does entropy add predictive power beyond surprisal?
+   → R² improvement: 0.0031 (22.0% better)
+   → F-test p-value: 0.00e+00
+   → Entropy coefficient p-value: 0.00e+00
+   → CONCLUSION: YES - Entropy adds significant value!
+   → Statistical evidence: F-test significant (p < 0.05)
+   → Practical evidence: 22.0% improvement in R²
+
+H3: Statistical significance of model comparisons
+   → Combined vs Surprisal-only:
+     • F-test p-value: 0.00e+00
+     • Significant: YES
+   → Combined vs Entropy-only:
+     • F-test p-value: 0.00e+00
+     • Significant: YES
+   → Direct correlation comparison:
+     • Surprisal-RT: r = 0.120, p = 0.00e+00
+     • Entropy-RT:   r = 0.098, p = 0.00e+00
+
+EFFECT SIZE ANALYSIS:
+   → Cohen's f² = 0.220 (MEDIUM effect)
+   → Interpretation:
+     • Medium practical significance - entropy meaningfully improves prediction
+
+📊 STATISTICAL SUMMARY:
+   → Best single predictor: Surprisal
+   → Entropy adds significant value: YES
+   → Key p-values:
+     • Surprisal significance: p = 0.00e+00
+     • Entropy significance: p = 0.00e+00
+     • Entropy in combined model: p = 0.00e+00
+     • Model improvement F-test: p = 0.00e+00
+✓ Plot saved as 'simple_entropy_analysis.png'
+
+✓ Results saved to 'simple_test_results.csv'
+
+=== FINAL SUMMARY ===
+✅ SUCCESS: Processed 560644 word observations from 9976 trials
+   📊 Model Performance:
+      • Surprisal only: R² = 0.0143
+      • Entropy only:   R² = 0.0095
+      • Combined:       R² = 0.0175
+
+   🔍 KEY FINDINGS:
+      • Surprisal is better single predictor than entropy
+      • ✅ Entropy DOES add significant predictive power!
+      • 📈 Improvement: +0.0031 R² (22.0% better)
+      • 📏 Effect size: medium
+
+   📋 COMPARISON TO TASK 1:
+      • Task 1 Pythia R²: 0.0130
+      • Our Surprisal R²: 0.0143
+      • Relative effect: 1.1x stronger
+      • 🆕 Entropy adds 0.31% more explained variance!

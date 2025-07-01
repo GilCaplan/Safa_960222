@@ -38,7 +38,7 @@ def mini_test():
         surprisals, probs = pythia_model.get_surprisal_and_probability(sentence)
 
         # Calculate entropy using simple method
-        entropies = calculate_simple_entropy(sentence, pythia_model.model, pythia_model.tokenizer, pythia_model.device)
+        entropies = calculate_entropy(sentence, pythia_model.model, pythia_model.tokenizer, pythia_model.device)
 
         print(f"   Words: {words}")
         print(f"   Surprisals: {[f'{s:.2f}' for s in surprisals]}")
@@ -54,7 +54,7 @@ def mini_test():
     return True
 
 
-def calculate_simple_entropy(sentence, model, tokenizer, device):
+def calculate_entropy(sentence, model, tokenizer, device):
     """Simple entropy calculation that matches word alignment with surprisal"""
     import torch
     import torch.nn.functional as F
