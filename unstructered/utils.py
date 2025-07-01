@@ -333,7 +333,7 @@ def create__plot(df):
     axes[2].set_xlabel('Surprisal')
     axes[2].set_ylabel('Entropy')
     axes[2].set_title(f'Surprisal vs Entropy (r={df["surprisal"].corr(df["entropy"]):.3f})')
-
+    # plotting
     plt.tight_layout()
     plt.savefig('entropy_analysis.png', dpi=150, bbox_inches='tight')
     plt.show()
