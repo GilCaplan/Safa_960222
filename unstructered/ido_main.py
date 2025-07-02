@@ -15,12 +15,12 @@ from utils import test_hypotheses_, create_plots
 # ======================================================================
 # 1.  Raw-data loader  (downloads the corpus if needed)
 # ======================================================================
-RAW_DATA_ROOT = Path("data/OneStop")
+RAW_DATA_ROOT = Path("../data/OneStop")
 
 def load_raw_df() -> pd.DataFrame:
     """Return the IA-Paragraph CSV as a DataFrame (download if absent)."""
     # Clone repo if missing
-    repo_dir = Path("OneStop-Eye-Movements")
+    repo_dir = Path("../OneStop-Eye-Movements")
     if not repo_dir.is_dir():
         subprocess.run(
             ["git", "clone",
@@ -132,8 +132,8 @@ def add_surprisal_entropy_column(
 # ======================================================================
 # 3.  Build-once / load-many cache utilities
 # ======================================================================
-ENRICHED_PARQUET = Path("data/OneStop/ia_paragraph_multi_enriched.parquet")
-CACHE_DIR        = Path("data/OneStop/model_caches")
+ENRICHED_PARQUET = Path("../data/OneStop/ia_paragraph_multi_enriched.parquet")
+CACHE_DIR        = Path("../data/OneStop/model_caches")
 
 # (rest unchanged)
 def _col_prefix(model_name: str) -> str:
@@ -166,7 +166,7 @@ def _add_model_columns(df: pd.DataFrame,
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     df[[surp_col, ent_col]].to_parquet(cache_file, index=False)
     print(f"✅  Cached columns → {cache_file}")
-    del mdl; torch.cuda.empty_cache(); gc.collect()
+    del mdl; torch.mps.empty_cache(); gc.collect()
     return df
 
 def build_enriched_df(raw_df: pd.DataFrame,
@@ -206,7 +206,8 @@ def main():
         "EleutherAI/pythia-1b",
         "EleutherAI/pythia-1.4b",
     ]
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.mps.is_available() else "cpu")
     df = load_enriched_df(load_raw_df, MODELS, device)
     # Run hypothesis tests for each model
     for model_name in MODELS:
