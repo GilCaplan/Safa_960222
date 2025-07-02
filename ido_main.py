@@ -10,7 +10,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from sklearn.linear_model import LinearRegression
 import statsmodels.api as sm
 
-from utils import test_hypotheses_, create_plots
+from utils import test_hypotheses_, create_plots, plot_r2_vs_model_size
 
 # ======================================================================
 # 1.  Raw-data loader  (downloads the corpus if needed)
@@ -208,13 +208,15 @@ def main():
     ]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     df = load_enriched_df(load_raw_df, MODELS, device)
+    stats_results = []
     # Run hypothesis tests for each model
     for model_name in MODELS:
         prefix = _col_prefix(model_name)
         surp_col = f"{prefix}_surprisal"
         ent_col = f"{prefix}_entropy"
         print(f"\n### Results for {model_name} ###")
-        test_hypotheses_(df, surp_col=surp_col, ent_col=ent_col,rt_col='IA_DWELL_TIME')
+        stats = test_hypotheses_(df, surp_col=surp_col, ent_col=ent_col,rt_col='IA_DWELL_TIME')
+        stats_results.append(stats)
 
     for model_name in MODELS:
         prefix = _col_prefix(model_name)
@@ -222,5 +224,8 @@ def main():
         ent_col = f"{prefix}_entropy"
         create_plots(df, model_name, surp_col, ent_col, rt_col="IA_DWELL_TIME")
 
+    plot_r2_vs_model_size(MODELS, stats_results)
+
 if __name__ == "__main__":
     main()
+
