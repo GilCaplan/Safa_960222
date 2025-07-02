@@ -8,6 +8,7 @@ import math
 from sklearn.linear_model import LinearRegression
 import statsmodels.api as sm
 import torch
+import re
 import pandas as pd
 import numpy as np
 from wordfreq import word_frequency
@@ -234,3 +235,45 @@ def create_plots(
         ylabel="Reading Time (ms)",
         title="RT vs Entropy"
     )
+
+def _model_size_millions(model_name: str) -> float:
+    """
+    Extract the model‐parameter count in *millions* from a name like
+    “EleutherAI/pythia-70m” or “EleutherAI/pythia-1.4b”.
+    """
+    m = re.search(r"(\d+(?:\.\d+)?)([mb])", model_name, re.I)
+    if not m:
+        raise ValueError(f"Cannot parse size from {model_name!r}")
+    val, suffix = m.groups()
+    val = float(val)
+    return val * (1_000 if suffix.lower() == "b" else 1)
+
+def plot_r2_vs_model_size(model_names, stats_list):
+    """
+    Given parallel lists of *model_names* and their stats-dicts returned by
+    `test_hypotheses_`, draw three line charts:
+      • R²(surprisal)   vs model size
+      • R²(entropy)     vs model size
+      • R²(surprisal+entropy) vs model size
+    """
+    # convert names → numeric sizes
+    sizes = [_model_size_millions(n) for n in model_names]
+
+    # collect R² values
+    r2_surp  = [s["r2_surp"]  for s in stats_list]
+    r2_ent   = [s["r2_ent"]   for s in stats_list]
+    r2_both  = [s["r2_both"]  for s in stats_list]
+
+    # plotting helper
+    def _plot(xs, ys, ylabel, title):
+        plt.figure(figsize=(6, 4))
+        plt.plot(xs, ys, marker="o", linewidth=2)
+        plt.xlabel("Model size (millions of parameters)")
+        plt.ylabel(ylabel)
+        plt.title(title)
+        plt.tight_layout()
+        plt.show()
+
+    _plot(sizes, r2_surp, "R²", "R² vs Model Size — Surprisal only")
+    _plot(sizes, r2_ent,  "R²", "R² vs Model Size — Entropy only")
+    _plot(sizes, r2_both, "R²", "R² vs Model Size — Surprisal + Entropy")
