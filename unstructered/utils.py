@@ -234,3 +234,11 @@ def create_plots(
         ylabel="Reading Time (ms)",
         title="RT vs Entropy"
     )
+
+    _scatter_with_line(
+        df[ent_col].values + df[surp_col].values,
+        df[rt_col].values,
+        xlabel="Surprisal + Entropy (bits)",
+        ylabel="Reading Time (ms)",
+        title="RT vs Surprisal + Entropy"
+    )
