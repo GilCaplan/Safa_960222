@@ -607,7 +607,7 @@ def compute_surprisals(test_df, kenlm_model, pythia_model):
 
 
 def generate_all_task1_graphs(df):
-    """Generate all 7 required graphs for Task 1"""
+    """Generate all 7 required graphs for Task 1 split into two plots"""
     print("\n=== Generating Task 1 Graphs ===")
 
     df_clean = df.dropna()
@@ -634,94 +634,116 @@ def generate_all_task1_graphs(df):
             })
     spillover_df = pd.DataFrame(spillover_data)
 
-    # Create figure with all 7 graphs
-    fig = plt.figure(figsize=(20, 15))
-
-    # Graph 1: Trigram Surprisal vs RT
-    ax1 = plt.subplot(3, 3, 1)
+    # Calculate all statistics first
     slope1, intercept1, r1, p1, _ = stats.linregress(df_clean['TRIGRAM_SURPRISAL'], df_clean['IA_DWELL_TIME'])
     r2_1 = r1 ** 2
-    plt.scatter(df_clean['TRIGRAM_SURPRISAL'], df_clean['IA_DWELL_TIME'], alpha=0.3, s=1, color='blue')
-    plt.plot(df_clean['TRIGRAM_SURPRISAL'], intercept1 + slope1 * df_clean['TRIGRAM_SURPRISAL'], 'r-', linewidth=2)
-    plt.xlabel('Trigram Surprisal (bits)', fontsize=12)
-    plt.ylabel('Reading Time (ms)', fontsize=12)
-    plt.title(f'1. Trigram Surprisal vs RT (R² = {r2_1:.3f})', fontsize=14)
-    plt.grid(True, alpha=0.3)
 
-    # Graph 2: Pythia Surprisal vs RT
-    ax2 = plt.subplot(3, 3, 2)
     slope2, intercept2, r2, p2, _ = stats.linregress(df_clean['PYTHIA_SURPRISAL'], df_clean['IA_DWELL_TIME'])
     r2_2 = r2 ** 2
-    plt.scatter(df_clean['PYTHIA_SURPRISAL'], df_clean['IA_DWELL_TIME'], alpha=0.3, s=1, color='green')
-    plt.plot(df_clean['PYTHIA_SURPRISAL'], intercept2 + slope2 * df_clean['PYTHIA_SURPRISAL'], 'r-', linewidth=2)
-    plt.xlabel('Pythia Surprisal (bits)', fontsize=12)
-    plt.ylabel('Reading Time (ms)', fontsize=12)
-    plt.title(f'2. Pythia Surprisal vs RT (R² = {r2_2:.3f})', fontsize=14)
-    plt.grid(True, alpha=0.3)
 
-    # Graph 3: Pythia vs Trigram Surprisals
-    ax3 = plt.subplot(3, 3, 3)
     slope3, intercept3, r3, p3, _ = stats.linregress(df_clean['PYTHIA_SURPRISAL'], df_clean['TRIGRAM_SURPRISAL'])
     r2_3 = r3 ** 2
-    plt.scatter(df_clean['PYTHIA_SURPRISAL'], df_clean['TRIGRAM_SURPRISAL'], alpha=0.3, s=1, color='purple')
-    plt.plot(df_clean['PYTHIA_SURPRISAL'], intercept3 + slope3 * df_clean['PYTHIA_SURPRISAL'], 'r-', linewidth=2)
-    plt.xlabel('Pythia Surprisal (bits)', fontsize=12)
-    plt.ylabel('Trigram Surprisal (bits)', fontsize=12)
-    plt.title(f'3. Pythia vs Trigram Surprisals (R² = {r2_3:.3f})', fontsize=14)
-    plt.grid(True, alpha=0.3)
 
-    # Graph 4: Pythia Probability vs Current RT
-    ax4 = plt.subplot(3, 3, 4)
     slope4, intercept4, r4, p4, _ = stats.linregress(spillover_df['CURRENT_PYTHIA_LOG_PROB'],
                                                      spillover_df['CURRENT_RT'])
     r2_4 = r4 ** 2
-    plt.scatter(spillover_df['CURRENT_PYTHIA_LOG_PROB'], spillover_df['CURRENT_RT'], alpha=0.3, s=1, color='orange')
-    plt.plot(spillover_df['CURRENT_PYTHIA_LOG_PROB'], intercept4 + slope4 * spillover_df['CURRENT_PYTHIA_LOG_PROB'],
-             'r-', linewidth=2)
-    plt.xlabel('Pythia Log Probability', fontsize=12)
-    plt.ylabel('Current Word RT (ms)', fontsize=12)
-    plt.title(f'4. Pythia Probability vs Current RT (R² = {r2_4:.3f})', fontsize=14)
-    plt.grid(True, alpha=0.3)
 
-    # Graph 5: Pythia Probability vs Next RT (Spillover)
-    ax5 = plt.subplot(3, 3, 5)
     slope5, intercept5, r5, p5, _ = stats.linregress(spillover_df['CURRENT_PYTHIA_LOG_PROB'], spillover_df['NEXT_RT'])
     r2_5 = r5 ** 2
-    plt.scatter(spillover_df['CURRENT_PYTHIA_LOG_PROB'], spillover_df['NEXT_RT'], alpha=0.3, s=1, color='red')
-    plt.plot(spillover_df['CURRENT_PYTHIA_LOG_PROB'], intercept5 + slope5 * spillover_df['CURRENT_PYTHIA_LOG_PROB'],
-             'r-', linewidth=2)
-    plt.xlabel('Pythia Log Probability', fontsize=12)
-    plt.ylabel('Next Word RT (ms)', fontsize=12)
-    plt.title(f'5. Pythia Probability vs Next RT (R² = {r2_5:.3f})', fontsize=14)
-    plt.grid(True, alpha=0.3)
 
-    # Graph 6: Trigram Probability vs Current RT
-    ax6 = plt.subplot(3, 3, 6)
     slope6, intercept6, r6, p6, _ = stats.linregress(spillover_df['CURRENT_TRIGRAM_LOG_PROB'],
                                                      spillover_df['CURRENT_RT'])
     r2_6 = r6 ** 2
+
+    slope7, intercept7, r7, p7, _ = stats.linregress(spillover_df['CURRENT_TRIGRAM_LOG_PROB'], spillover_df['NEXT_RT'])
+    r2_7 = r7 ** 2
+
+    # ===== FIRST PLOT: Core Analysis (4 graphs) =====
+    fig1 = plt.figure(figsize=(16, 12))
+
+    # Graph 1: Trigram Surprisal vs RT
+    ax1 = plt.subplot(2, 2, 1)
+    plt.scatter(df_clean['TRIGRAM_SURPRISAL'], df_clean['IA_DWELL_TIME'], alpha=0.3, s=1, color='blue')
+    plt.plot(df_clean['TRIGRAM_SURPRISAL'], intercept1 + slope1 * df_clean['TRIGRAM_SURPRISAL'], 'r-', linewidth=2)
+    plt.xlabel('Trigram Surprisal (bits)', fontsize=18)
+    plt.ylabel('Reading Time (ms)', fontsize=18)
+    plt.title(f'1. Trigram Surprisal vs RT (R² = {r2_1:.3f})', fontsize=20)
+    plt.tick_params(axis='both', which='major', labelsize=16)
+    plt.grid(True, alpha=0.3)
+
+    # Graph 2: Pythia Surprisal vs RT
+    ax2 = plt.subplot(2, 2, 2)
+    plt.scatter(df_clean['PYTHIA_SURPRISAL'], df_clean['IA_DWELL_TIME'], alpha=0.3, s=1, color='green')
+    plt.plot(df_clean['PYTHIA_SURPRISAL'], intercept2 + slope2 * df_clean['PYTHIA_SURPRISAL'], 'r-', linewidth=2)
+    plt.xlabel('Pythia Surprisal (bits)', fontsize=18)
+    plt.ylabel('Reading Time (ms)', fontsize=18)
+    plt.title(f'2. Pythia Surprisal vs RT (R² = {r2_2:.3f})', fontsize=20)
+    plt.tick_params(axis='both', which='major', labelsize=16)
+    plt.grid(True, alpha=0.3)
+
+    # Graph 3: Pythia vs Trigram Surprisals
+    ax3 = plt.subplot(2, 2, 3)
+    plt.scatter(df_clean['PYTHIA_SURPRISAL'], df_clean['TRIGRAM_SURPRISAL'], alpha=0.3, s=1, color='purple')
+    plt.plot(df_clean['PYTHIA_SURPRISAL'], intercept3 + slope3 * df_clean['PYTHIA_SURPRISAL'], 'r-', linewidth=2)
+    plt.xlabel('Pythia Surprisal (bits)', fontsize=18)
+    plt.ylabel('Trigram Surprisal (bits)', fontsize=18)
+    plt.title(f'3. Pythia vs Trigram Surprisals (R² = {r2_3:.3f})', fontsize=20)
+    plt.tick_params(axis='both', which='major', labelsize=16)
+    plt.grid(True, alpha=0.3)
+
+    # Graph 4: Pythia Probability vs Current RT
+    ax4 = plt.subplot(2, 2, 4)
+    plt.scatter(spillover_df['CURRENT_PYTHIA_LOG_PROB'], spillover_df['CURRENT_RT'], alpha=0.3, s=1, color='orange')
+    plt.plot(spillover_df['CURRENT_PYTHIA_LOG_PROB'], intercept4 + slope4 * spillover_df['CURRENT_PYTHIA_LOG_PROB'],
+             'r-', linewidth=2)
+    plt.xlabel('Pythia Log Probability', fontsize=18)
+    plt.ylabel('Current Word RT (ms)', fontsize=18)
+    plt.title(f'4. Pythia Probability vs Current RT (R² = {r2_4:.3f})', fontsize=20)
+    plt.tick_params(axis='both', which='major', labelsize=16)
+    plt.grid(True, alpha=0.3)
+
+    plt.tight_layout(pad=3.0)
+    plt.savefig('task1_core_analysis.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+    # ===== SECOND PLOT: Spillover Effects (3 graphs) =====
+    fig2 = plt.figure(figsize=(18, 6))
+
+    # Graph 5: Pythia Probability vs Next RT (Spillover)
+    ax5 = plt.subplot(1, 3, 1)
+    plt.scatter(spillover_df['CURRENT_PYTHIA_LOG_PROB'], spillover_df['NEXT_RT'], alpha=0.3, s=1, color='red')
+    plt.plot(spillover_df['CURRENT_PYTHIA_LOG_PROB'], intercept5 + slope5 * spillover_df['CURRENT_PYTHIA_LOG_PROB'],
+             'r-', linewidth=2)
+    plt.xlabel('Pythia Log Probability', fontsize=18)
+    plt.ylabel('Next Word RT (ms)', fontsize=18)
+    plt.title(f'5. Pythia Probability vs Next RT (R² = {r2_5:.3f})', fontsize=16)
+    plt.tick_params(axis='both', which='major', labelsize=16)
+    plt.grid(True, alpha=0.3)
+
+    # Graph 6: Trigram Probability vs Current RT
+    ax6 = plt.subplot(1, 3, 2)
     plt.scatter(spillover_df['CURRENT_TRIGRAM_LOG_PROB'], spillover_df['CURRENT_RT'], alpha=0.3, s=1, color='brown')
     plt.plot(spillover_df['CURRENT_TRIGRAM_LOG_PROB'], intercept6 + slope6 * spillover_df['CURRENT_TRIGRAM_LOG_PROB'],
              'r-', linewidth=2)
-    plt.xlabel('Trigram Log Probability', fontsize=12)
-    plt.ylabel('Current Word RT (ms)', fontsize=12)
-    plt.title(f'6. Trigram Probability vs Current RT (R² = {r2_6:.3f})', fontsize=14)
+    plt.xlabel('Trigram Log Probability', fontsize=18)
+    plt.ylabel('Current Word RT (ms)', fontsize=18)
+    plt.title(f'6. Trigram Probability vs Current RT (R² = {r2_6:.3f})', fontsize=16)
+    plt.tick_params(axis='both', which='major', labelsize=16)
     plt.grid(True, alpha=0.3)
 
     # Graph 7: Trigram Probability vs Next RT (Spillover)
-    ax7 = plt.subplot(3, 3, 7)
-    slope7, intercept7, r7, p7, _ = stats.linregress(spillover_df['CURRENT_TRIGRAM_LOG_PROB'], spillover_df['NEXT_RT'])
-    r2_7 = r7 ** 2
+    ax7 = plt.subplot(1, 3, 3)
     plt.scatter(spillover_df['CURRENT_TRIGRAM_LOG_PROB'], spillover_df['NEXT_RT'], alpha=0.3, s=1, color='pink')
     plt.plot(spillover_df['CURRENT_TRIGRAM_LOG_PROB'], intercept7 + slope7 * spillover_df['CURRENT_TRIGRAM_LOG_PROB'],
              'r-', linewidth=2)
-    plt.xlabel('Trigram Log Probability', fontsize=12)
-    plt.ylabel('Next Word RT (ms)', fontsize=12)
-    plt.title(f'7. Trigram Probability vs Next RT (R² = {r2_7:.3f})', fontsize=14)
+    plt.xlabel('Trigram Log Probability', fontsize=18)
+    plt.ylabel('Next Word RT (ms)', fontsize=18)
+    plt.title(f'7. Trigram Probability vs Next RT (R² = {r2_7:.3f})', fontsize=16)
+    plt.tick_params(axis='both', which='major', labelsize=16)
     plt.grid(True, alpha=0.3)
 
-    plt.tight_layout()
-    plt.savefig('task1_complete_graphs.png', dpi=300, bbox_inches='tight')
+    plt.tight_layout(pad=3.0)
+    plt.savefig('task1_spillover_effects.png', dpi=300, bbox_inches='tight')
     plt.show()
 
     # Return results
@@ -761,12 +783,86 @@ def find_disagreement_examples(df, threshold=3.0):
     return disagreements
 
 
-def main():
-    """Main execution function"""
+def load_saved_results():
+    """Load previously saved results if they exist"""
+    surprisal_file = 'task1_surprisal_data.csv'
+    results_file = 'task1_results.pkl'
+
+    if os.path.exists(surprisal_file) and os.path.exists(results_file):
+        print(f"✓ Found saved results: {surprisal_file}, {results_file}")
+        print("Loading saved data...")
+
+        try:
+            surprisal_df = pd.read_csv(surprisal_file)
+            with open(results_file, 'rb') as f:
+                results = pickle.load(f)
+
+            print(f"✓ Loaded surprisal data: {len(surprisal_df)} words")
+            print(f"✓ Loaded analysis results")
+            return surprisal_df, results
+        except Exception as e:
+            print(f"❌ Error loading saved results: {e}")
+            print("Will recompute from scratch...")
+            return None, None
+    else:
+        print("No saved results found. Will compute from scratch...")
+        return None, None
+
+
+def save_results(surprisal_df, results, disagreements):
+    """Save results to disk"""
+    print("\n=== Saving Results ===")
+
+    # Save main results
+    surprisal_df.to_csv('task1_surprisal_data.csv', index=False)
+    with open('task1_results.pkl', 'wb') as f:
+        pickle.dump(results, f)
+
+    # Save disagreements
+    disagreements.to_csv('task1_disagreements.csv', index=False)
+
+    print("✓ Results saved to:")
+    print("  - task1_surprisal_data.csv")
+    print("  - task1_results.pkl")
+    print("  - task1_disagreements.csv")
+
+
+def main(force_recompute=False):
+    """Main execution function with save/load functionality"""
     DATA_PATH = "../unstructered/data/onestop/ia_Paragraph.csv"
 
     try:
         print("=== TASK 1: N-gram vs Neural Language Models ===")
+
+        # Try to load saved results first (unless forced to recompute)
+        if not force_recompute:
+            surprisal_df, results = load_saved_results()
+
+            if surprisal_df is not None and results is not None:
+                print("Using saved results...")
+
+                # Generate graphs from saved data
+                print("\n=== Generating Graphs from Saved Data ===")
+                generate_all_task1_graphs(surprisal_df)
+
+                # Find disagreements
+                disagreements = find_disagreement_examples(surprisal_df)
+
+                print("\n" + "=" * 60)
+                print("TASK 1 COMPLETED (from saved data)!")
+                print("=" * 60)
+                print("✓ Loaded previously computed results")
+                print("✓ Generated all 7 graphs")
+                print("✓ Found disagreement examples")
+
+                return {
+                    'surprisal_df': surprisal_df,
+                    'results': results,
+                    'disagreements': disagreements
+                }
+
+        # If no saved results or forced recompute, run full pipeline
+        print("Computing from scratch...")
         print("Training KenLM trigram on WikiText-2...")
 
         # 1. Load and preprocess data
@@ -785,7 +881,7 @@ def main():
         pythia_model = PythiaModel()
 
         # 4. Compute surprisals
-        print("\n=== Computing Surprisals (NO CLAMPING) ===")
+        print("\n=== Computing Surprisals ===")
         surprisal_df = compute_surprisals(df, kenlm_model, pythia_model)
 
         if len(surprisal_df) == 0:
@@ -806,20 +902,17 @@ def main():
         disagreements = find_disagreement_examples(surprisal_df)
 
         # 7. Save results
-        print("\n=== Saving Results ===")
-        surprisal_df.to_csv('task1_surprisal_data.csv', index=False)
-        with open('task1_results.pkl', 'wb') as f:
-            pickle.dump(results, f)
-        print("✓ Results saved to task1_surprisal_data.csv and task1_results.pkl")
+        save_results(surprisal_df, results, disagreements)
 
         print("\n" + "=" * 60)
-        print("TASK 1 COMPLETED SUCCESSFULLY (NO CLAMPING)!")
+        print("TASK 1 COMPLETED SUCCESSFULLY!")
         print("=" * 60)
         print("✓ WikiText-2 trigram model trained and saved")
         print("✓ All 7 required graphs generated with natural surprisal values")
         print("✓ Model comparison completed")
         print("✓ Spillover effects analyzed")
         print("✓ Disagreement examples found")
+        print("✓ Results saved for future use")
         print("✓ NO artificial clamping - natural value distributions preserved")
 
         return {
@@ -834,5 +927,27 @@ def main():
         return None
 
 
+def generate_graphs_only():
+    """Convenience function to just generate graphs from saved data"""
+    surprisal_df, results = load_saved_results()
+
+    if surprisal_df is not None:
+        print("Generating graphs from saved data...")
+        generate_all_task1_graphs(surprisal_df)
+        disagreements = find_disagreement_examples(surprisal_df)
+        return {
+            'surprisal_df': surprisal_df,
+            'results': results,
+            'disagreements': disagreements
+        }
+    else:
+        print("❌ No saved data found. Run main() first to compute results.")
+        return None
+
+
 if __name__ == "__main__":
-    results = main()
+    # Default: Try to load saved results, compute if not found
+    # results = main(force_recompute=False)
+    generate_graphs_only()
+    # To force recomputation: main(force_recompute=True)
+    # To just generate graphs: generate_graphs_only()
